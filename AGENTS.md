@@ -29,7 +29,7 @@
   - `feat: 实现中文优化 ACBM 多模式匹配库`
   - `fix: 修复 maxOut 单值遮蔽导致的漏命中`
   - `docs: 补充 AGENTS.md 协作规范`
-- 提交前必须确认 `git status` 干净合理、`git diff` 只含本次任务的改动；**不提交**密钥、临时文件（`*.out`、`test_out.txt`、`bench_out.txt`、`.env.local` 等已由 `.gitignore` 排除）。
+- 提交前必须确认 `git status` 干净合理、`git diff` 只含本次任务的改动；**不提交**密钥、临时文件（`*.out`、`test_out.txt`、`bench_out.txt`、`.env.*` 等已由 `.gitignore` 排除）。
 - 禁止 `--force` 推送、禁止改写历史；仅在被明确要求时推送远端。
 - 多行提交信息：POSIX shell（WSL）下直接用 heredoc：`git commit -m "$(cat <<'EOF' ... EOF)"`。
 - **提交信息环境中立**：commit message 中不得出现本地绝对路径，仅可使用相对项目根目录的路径。
@@ -40,7 +40,7 @@
   - **禁止**出现本地绝对路径（盘符路径、`/home/...`、`/mnt/...`、`C:\Users\...` 等）与用户名、机器名等环境特定信息；
   - **只允许**使用相对项目根目录的路径（如 `spec/spec.md`、`build.go`）；
   - 仓库根目录本身在文档中一律表述为「项目根目录」或 `.`，不写实际盘符。
-- 本地绝对路径**唯一合法的存放处**是 `.env.local`（不提交）。
+- 本地绝对路径**唯一合法的存放处**是 `.env.*`（不提交）。
 
 ## 3. 代码与工程规范
 
@@ -64,7 +64,7 @@
 
 ## 4. 工作循环（每次任务必须遵守）
 
-1. **读环境**：读根目录 `.env.local`（存在则直接采用探测结论；缺失才重新探测并回写）。
+1. **读环境**：读根目录当前环境对应的 `.env.*` 文件（`.env.wsl` / `.env.win`，存在则直接采用探测结论；缺失才重新探测并回写）。
 2. **读 spec**：从 `spec/spec.md` 起手，明确需求边界与验收场景。
 3. **查进度**：读 `spec/tasks.md`，确认已完成/未完成任务，避免重复劳动。
 4. **最小实现**：只做被要求或显然必要的改动；不过度设计、不提前抽象。
@@ -82,15 +82,15 @@ search.go          FindAll / FindNext / scan / skipForward
 spec/              规格文档（spec.md / tasks.md / checklist.md）
 AGENTS.md          本文件
 .golangci.yml      golangci-lint 配置（standard 集 + 少量增补）
-.env.local         本地环境 dotfile（不提交，gitignore 排除）
-.gitignore         排除临时产物与 .env.local
+.env.win/.env.wsl  本地环境 dotfile（按环境取用，不提交，gitignore 排除）
+.gitignore         排除临时产物与 .env.*
 ```
 
 ## 6. Shell 环境规范（WSL）
 
 - 开发环境为 **Remote-WSL**（Ubuntu，POSIX 登录 shell）：`go`、`git`、`golangci-lint` 均在 PATH 中，直接以命令名执行，无需路径前缀。
-- 环境探测结论持久化于根目录 `.env.local`（被 `.gitignore` 排除、禁止提交）：
-  - 每次任务开始先读取并直接采用（见第 4 节工作循环第 1 步）；
+- 环境探测结论持久化于根目录 `.env.*` 文件，**按环境独立成文件、互不覆盖**（`.env.win` — Windows 主机侧探测结论；`.env.wsl` — Remote-WSL 侧探测结论）：
+  - 每次任务开始先读取当前环境对应文件并直接采用（见第 4 节工作循环第 1 步）；
   - 记录内容：OS / 发行版、工具链路径与版本、项目路径、验证结论与历史备注；
-  - 环境变化（如再次跨 Windows / WSL 迁移）时删除该文件重新探测并回写。
+  - 环境变化时只更新对应环境的文件，**不直接改动其他环境的文件**；新环境（如 macOS、其他发行版）按同一命名规则新增 `.env.<环境名>`。
 - shell 命令与提交信息一律按 POSIX 语义执行，heredoc 可直接使用（见第 2 节）。

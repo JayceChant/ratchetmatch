@@ -5,7 +5,7 @@ bench_out.txt
 *.test
 
 # 本地环境 dotfile（含本地绝对路径，禁止提交；见 AGENTS.md Shell 环境规范）
-.env.local
+.env.*
 
 # IDE
 .idea/
