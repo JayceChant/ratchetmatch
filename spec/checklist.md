@@ -1,0 +1,31 @@
+# Checklist
+
+- [x] go.mod 存在，声明 module ratchetsearch 与 go 1.27
+- [x] New 接受关键词列表构建 Matcher；空词库（nil/长度 0）与含空字符串的词库返回可区分的错误
+- [x] 重复关键词被去重
+- [x] Trie 按 rune 构建，中文按整字符（Unicode 码点）转移，绝不按 UTF-8 字节碎片转移
+- [x] 关键词末节点带终止标记（termLen），实现完整匹配语义（部分前缀不算命中）
+- [x] 失败指针经 BFS 计算，指向「已匹配部分的最长真后缀（且是词库中某关键词前缀）」的节点，无则指向 root
+- [x] 失败指针在构建期解析为全量转移（DFA goto 表，叶子共享 fail 表）：查询期任意状态 × 任意 rune 的转移为 O(1)，无运行时回退链
+- [x] FindAll 对文本按 rune 单遍扫描：T 指针单调向前绝不回退，仅自动机状态在移动
+- [x] 到达终止状态时，经输出链（outLens，含失败链继承）取得以当前文本位置结尾的候选
+- [x] 非法 UTF-8 字节按 utf8.RuneError 处理并前进，不 panic、不漏扫后续内容
+- [x] root 态 BM 坏字符跳跃实现：词库 rune 集 + 256 位字节过滤器，字节级批量跳过后 rune 解码精确判断
+- [x] 跳跃逻辑保证不漏报：500 组随机对照测试与禁用跳跃的朴素参照实现结果完全一致
+- [x] 词库仅含中文时，ASCII/标点长区段被字节级快速跳过且结果正确（TestASCIISkipCorrectness）
+- [x] 非重叠贪心语义正确：前缀关系取最长（{"中国","中国人"} + "我是中国人" → 仅 "中国人"）
+- [x] 前缀未在文本中完整出现时输出较短关键词（{"中","中毒"} + "中x" → "中"）
+- [x] 重叠命中取先命中者（{"上海","海口"} + "上海口" → 仅 "上海"）
+- [x] 同结尾取更长（{"他","其他"} + "其他" → 仅 "其他"）
+- [x] 不重叠命中按 Start 升序全部输出；命中之间互不重叠，每个文本位置至多属于一个命中
+- [x] pending 机制在单遍扫描中实现贪心语义，T 指针不回退；重叠候选被跳过后继续尝试更短候选（长词遮蔽下接续命中：{国,人,中国人}+"中国人" → 国+人）
+- [x] Match 的 Start/End 为字节偏移、半开区间，text[Start:End] == Keyword 成立（assertMatches 逐条自检 + rune 边界检查）
+- [x] 无命中或 text 为空时 FindAll 返回 nil（长度为 0）
+- [x] FindNext(text, offset) 从 offset 开始返回首个贪心命中，找到即终止不遍历剩余文本
+- [x] FindNext 无状态：Matcher 无查询期可变状态，可并发调用
+- [x] FindNext 边界正确：offset < 0 按 0；offset >= len(text) 返回 (Match{}, false)；offset 在 UTF-8 字符中间时向后对齐 rune 边界再扫描
+- [x] FindNext 迭代（以 End 推进）得到的命中序列与 FindAll 完全一致（500 组随机测试覆盖）
+- [x] FindNext 无命中返回 (Match{}, false)，命中返回 (Match, true)；采用 comma-ok 而非 *Match nil 或裸零值（选型理由记录在 spec）
+- [x] Matcher 构建后只读，可无锁并发使用 FindAll 与 FindNext；go test -race 通过（8 goroutine × 100 次）
+- [x] example_test.go 提供可运行示例（含 FindNext 按需迭代）；bench_test.go 提供两种场景基准并对照禁用跳跃的参照实现
+- [x] gofmt、go vet 通过；go test ./... 与 go test -race ./... 全部通过
