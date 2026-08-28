@@ -9,7 +9,7 @@
   - `New(keywords []string) (*Matcher, error)`：构建不可变 Matcher
   - `(*Matcher) FindAll(text string) []Match`：返回全部命中（按 Start 升序）
   - `(*Matcher) FindNext(text string, offset int) (Match, bool)`：无状态按需查找，从 offset（字节偏移）开始查找第一个命中，找到即终止扫描；comma-ok 形式返回，无命中时返回零值 Match 与 false
-- 构建期：rune 级 Trie（支持中文多字节字符）+ 失败指针（BFS 构建），并在构建期将失败指针解析为全量转移自动机（查询期每 rune O(1) 转移，无运行时回退链）
+- 构建期：rune 级 Trie（支持中文多字节字符）+ 失败指针（BFS 构建），并在构建期将失败指针解析为全量转移自动机（查询期每 rune 一次有序数组二分转移，O(log k)，k 为该状态的转移条目数，无运行时回退链）
 - BM 风格跳跃（坏字符规则）：自动机处于 root 态时，利用「词库 rune 集 + 256 位字节过滤器」直接跳过不可能出现匹配起始的文本段
 - 匹配语义（非重叠贪心）：先命中优先；同一起始位置前缀关系取最长；命中后跳过被覆盖区间，每个文本位置至多属于一个命中；结果按出现先后（Start 升序）排序
 - 单元测试（含中文、贪心语义、跳跃不漏报的随机对照测试、`-race` 并发测试）、使用示例、Benchmark
@@ -44,22 +44,43 @@
 系统 SHALL 在构建期通过 BFS 为每个 Trie 节点计算失败指针，语义为：
 - 指向「当前已匹配部分的最长真后缀（该后缀同时是词库中某关键词的前缀）」对应的 Trie 节点
 - 若不存在这样的后缀，则指向 root（表示需从 root 重新开始）
-- 构建完成后，失败指针被解析进节点的全量转移表（等价 DFA）：任意状态、任意 rune 的转移均为 O(1)，查询期不存在沿失败指针的链式回溯
+- 构建完成后，失败指针被解析进节点的全量转移表（等价 DFA，全局 CSR 有序数组布局）：任意状态、任意 rune 的转移为一次二分查找 O(log k)（k 为该状态的转移条目数），查询期不存在沿失败指针的链式回溯
 
 #### Scenario: 失败指针正确性
 - **WHEN** 词库含 {"上海", "海口"}，文本为 "上海口"
 - **THEN** 匹配完 "上海" 后遇到 '口' 无法下行时，失败转移仍使扫描继续；最终按贪心语义输出 "上海"
 
+### Requirement: 转移表内存布局（perf 优化，perf/optimize-automaton 分支）
+系统 SHALL 以全局 CSR（Compressed Sparse Row）有序数组存放全量转移表，取代每节点独立 map：
+- Matcher 持有一对平行数组 `keys []rune`（升序）与 `vals []int32`（转移目标），节点仅存 `base/count`（该节点转移区间在全局数组中的下标范围），不持有任何 map
+- 查询期转移：在 `keys[base:base+count]` 上二分查找当前 rune；未命中一律转移到 root（索引 0），与原 map 版语义完全一致
+- 无自有孩子的节点（叶子）复用其失败指针所指节点的 `base/count`——共享在 CSR 下零拷贝、零额外内存
+- 词库 rune 集（供 root 态跳跃判断）同样以有序 `[]rune` 切片 + 二分实现，取代 map
+- 构建期允许临时使用 map（Trie 插入、BFS 解析），构建完成后一次性展平为上述数组布局，临时 map 随构建结束被回收；Matcher 成品不含 map
+- 目标：相对 map 版显著降低构建内存与分配次数（B/op、allocs/op），扫描期转移不慢于 map 版（ns/op 无回退）
+
+#### Scenario: 构建内存缩减
+- **WHEN** 以 BenchmarkNew100/1k/10k 三档词库规模对比优化前后
+- **THEN** B/op 与 allocs/op 均显著下降，ns/op 不回退
+
+#### Scenario: 扫描性能不回退
+- **WHEN** 运行既有 BenchmarkFindAllChinese/Mixed 与 FindNextFirst
+- **THEN** ns/op 相对 map 基线无回退（混合文本跳跃收益 ~1.4x、FindNext ~10x 基线保持）
+
+#### Scenario: 语义与并发不变
+- **WHEN** 全部既有测试（含随机对照、FindNext 迭代一致性、-race 并发）
+- **THEN** 结果与 map 版完全一致；Matcher 构建后仍为只读、无查询期分配
+
 ### Requirement: 单遍扫描与单调前进
 系统 SHALL 对输入文本 T 按 rune 单遍扫描：
-- 当前 rune 在自动机中做 O(1) 转移（可下行则下行，否则走已解析的失败转移）
+- 当前 rune 在自动机中完成转移（可下行则下行，否则走已解析的失败转移），单次转移为一次有序数组二分
 - T 上的指针单调向前，每消费一个 rune 前进一次，绝不回退；只有自动机状态在移动
 - 到达终止状态时，取以当前文本位置**结尾**的最长关键词作为候选
 - 文本中出现非法 UTF-8 字节时按 `utf8.RuneError` 处理并前进 1 字节，不 panic、不漏扫后续内容
 
 #### Scenario: 长文本单遍完成
 - **WHEN** 输入任意长中文文本
-- **THEN** 扫描严格一遍结束，时间复杂度为 O(|T|/rune × 每 rune O(1) 转移 + 命中处理)
+- **THEN** 扫描严格一遍结束，时间复杂度为 O(|T|/rune × 每 rune O(log k) 转移 + 命中处理)
 
 ### Requirement: BM 坏字符跳跃（root 态安全跳过）
 系统 SHALL 在自动机处于 root 态时应用坏字符跳跃以加速扫描，且保证不漏报：
