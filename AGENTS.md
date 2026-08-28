@@ -31,7 +31,7 @@
   - `docs: 补充 AGENTS.md 协作规范`
 - 提交前必须确认 `git status` 干净合理、`git diff` 只含本次任务的改动；**不提交**密钥、临时文件（`*.out`、`test_out.txt`、`bench_out.txt`、`.env.local` 等已由 `.gitignore` 排除）。
 - 禁止 `--force` 推送、禁止改写历史；仅在被明确要求时推送远端。
-- 多行提交信息：POSIX shell（WSL / git bash）下可用 heredoc；PowerShell 不支持 heredoc，改写入 `.git/COMMIT_MSG.txt`（UTF-8）后 `git commit -F .git/COMMIT_MSG.txt`，用完删除该临时文件。
+- 多行提交信息：POSIX shell（WSL）下直接用 heredoc：`git commit -m "$(cat <<'EOF' ... EOF)"`。
 - **提交信息环境中立**：commit message 中不得出现本地绝对路径，仅可使用相对项目根目录的路径。
 
 ## 2.1 路径与环境的文档中立性（强制）
@@ -46,13 +46,13 @@
 
 - **Go 版本**：`go 1.27`（见 `go.mod`），不引入第三方依赖（保持零依赖库，标准库优先）。
 - **格式与静态检查**：任何改动提交前必须通过：
-  ```powershell
-  go build ./... ; go vet ./... ; gofmt -l .   # gofmt -l 必须无输出
+  ```bash
+  go build ./... && go vet ./... && gofmt -l .   # gofmt -l 必须无输出
   golangci-lint run                              # 0 issues（配置见 .golangci.yml）
   ```
   golangci-lint 配置原则：官方 standard 默认集 + 少量零误报增补，formatter 仅 gofmt；出现告警优先修代码而非改配置。
 - **测试门槛**：涉及源码改动的提交必须通过：
-  ```powershell
+  ```bash
   go test ./... -count=1
   go test -race ./... -count=1
   ```
@@ -85,3 +85,12 @@ AGENTS.md          本文件
 .env.local         本地环境 dotfile（不提交，gitignore 排除）
 .gitignore         排除临时产物与 .env.local
 ```
+
+## 6. Shell 环境规范（WSL）
+
+- 开发环境为 **Remote-WSL**（Ubuntu，POSIX 登录 shell）：`go`、`git`、`golangci-lint` 均在 PATH 中，直接以命令名执行，无需路径前缀。
+- 环境探测结论持久化于根目录 `.env.local`（被 `.gitignore` 排除、禁止提交）：
+  - 每次任务开始先读取并直接采用（见第 4 节工作循环第 1 步）；
+  - 记录内容：OS / 发行版、工具链路径与版本、项目路径、验证结论与历史备注；
+  - 环境变化（如再次跨 Windows / WSL 迁移）时删除该文件重新探测并回写。
+- shell 命令与提交信息一律按 POSIX 语义执行，heredoc 可直接使用（见第 2 节）。
