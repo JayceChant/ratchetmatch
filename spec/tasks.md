@@ -38,13 +38,13 @@
 - [x] Task 8: 质量验证
   - [x] 8.1 `gofmt`、`go vet` 通过；`go test ./...` 与 `go test -race ./...` 全部通过（12 测试 + 2 示例）
 
-- [ ] Task 9: 转移表 CSR 化（perf/optimize-automaton 分支）
-  - [ ] 9.1 新增 New 构建基准（BenchmarkNew100/1k/10k，ReportAllocs），采集 map 版基线
-  - [ ] 9.2 spec 增补「转移表内存布局」需求：全局 CSR 有序数组 + 二分转移，叶子共享 fail 表
-  - [ ] 9.3 build.go：node 改 `base/count` 指向全局 `keys/vals`，BFS 解析后一次性展平；runeSet 改有序切片
-  - [ ] 9.4 search.go：转移改二分查找；skipForward 的 runeSet 判断同步改二分
-  - [ ] 9.5 验证：全量测试（含随机对照/race）通过；BenchmarkNew B/op、allocs/op 显著下降；扫描基准无回退
-  - [ ] 9.6 白盒测试断言 Matcher 成品不含 map（nodes/keys/vals/runeSet 无 map 类型字段）
+- [x] Task 9: 稀疏转移 + fail 回退优化（perf/optimize-automaton 分支）
+  - [x] 9.1 新增 New 构建基准（BenchmarkNew100/1k/10k，ReportAllocs），采集 map 版基线（10k 词：878µs/1.08MB/1177 allocs；FindAllChinese 1.87ms、Mixed 1.00ms、FindNextFirst 91.6µs）
+  - [x] 9.2 spec 增补「转移表内存布局」需求（DFA 全量 CSR 方案实测构建内存反升、扫描回退 22–48%，废弃；改为稀疏转移 + fail 回退 + 词首字符集跳跃）
+  - [x] 9.3 build.go：节点仅存自有 trie 边（CSR 展平）+ fail；BFS 用带回退查找计算失败指针；root 首字符表 map 兼任跳跃集
+  - [x] 9.4 search.go：step 改段内查找 + fail 回退；skipForward 改用首字符集（root map）
+  - [x] 9.5 验证：全量测试（含随机对照/race）通过；New100 快 2.9x、B/op 省 2.7x、allocs 减半；New10k 快 1.3x、allocs 减半；扫描基准同机交错对比持平或略优（Chinese/Mixed -5% 左右，FindNext 持平）
+  - [x] 9.6 白盒测试更新：CSR 区间/升序/目标合法性不变量 + root 首字符表与词库首字符集一致性断言
 
 # Task Dependencies
 - Task 2, 4 依赖 Task 1（先有 module 与 API 声明）

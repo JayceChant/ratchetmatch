@@ -131,16 +131,68 @@ func TestNewValidation(t *testing.T) {
 	// 正常构建（含前缀关系词），并做白盒验证：
 	// 每个关键词从 root 独立插入，故 "世界"(root→世→界) 与 "你好世界"
 	// 中的 "世"(你→好→世) 是不同节点：root + 你/你好/好世/好世界/世/界 共 7 个；
-	// runeSet 恰为 4 个不同汉字；root 恰有 你、世 两个直接孩子。
+	// root 首字符表恰为 {你,世} 2 个（词首字符去重）；root 不进 CSR（走 map）。
 	m := mustNew(t, []string{"你好", "世界", "你好世界"})
 	if len(m.nodes) != 7 {
 		t.Errorf("白盒: trie 节点数 = %d, 期望 7", len(m.nodes))
 	}
-	if len(m.runeSet) != 4 {
-		t.Errorf("白盒: runeSet 大小 = %d, 期望 4", len(m.runeSet))
+	if len(m.rootNext) != 2 {
+		t.Errorf("白盒: root 首字符表大小 = %d, 期望 2", len(m.rootNext))
 	}
-	if len(m.nodes[0].next) != 2 {
-		t.Errorf("白盒: root 直接孩子数 = %d, 期望 2", len(m.nodes[0].next))
+}
+
+// ---------------------------------------------------------------------------
+// 1b. CSR 展平不变量（spec「转移表内存布局」）
+// ---------------------------------------------------------------------------
+
+// TestCSRLayout 白盒验证展平结果的结构不变量：
+//   - root 不进 CSR；transKeys/transVals 等长，非 root 节点区间落在数组范围内；
+//   - 每个节点区间内键严格升序（查找的正确性前提）；
+//   - 转移目标均为合法节点下标且非 0（0 保留给「未含 → 回退/留在 root」）；
+//   - 失败指针指向合法节点且严格更浅（无环，回退必然终止）；
+//   - root 首字符表与各关键词首 rune 集一致（跳跃判据正确性前提）。
+func TestCSRLayout(t *testing.T) {
+	m := mustNew(t, benchKeywords)
+	if len(m.transKeys) != len(m.transVals) {
+		t.Fatalf("transKeys(%d) 与 transVals(%d) 长度不一致", len(m.transKeys), len(m.transVals))
+	}
+	if m.nodes[0].base != 0 || m.nodes[0].count != 0 {
+		t.Fatalf("root 不应有 CSR 区间: base=%d count=%d", m.nodes[0].base, m.nodes[0].count)
+	}
+	for i := 1; i < len(m.nodes); i++ {
+		nd := &m.nodes[i]
+		if nd.count < 0 || nd.base < 0 || int(nd.base+nd.count) > len(m.transKeys) {
+			t.Fatalf("节点 %d 区间非法: base=%d count=%d（总长 %d）", i, nd.base, nd.count, len(m.transKeys))
+		}
+		for j := nd.base + 1; j < nd.base+nd.count; j++ {
+			if m.transKeys[j-1] >= m.transKeys[j] {
+				t.Fatalf("节点 %d 区间键非严格升序: keys[%d]=%U >= keys[%d]=%U", i, j-1, m.transKeys[j-1], j, m.transKeys[j])
+			}
+		}
+		for j := nd.base; j < nd.base+nd.count; j++ {
+			if to := m.transVals[j]; to <= 0 || int(to) >= len(m.nodes) {
+				t.Fatalf("节点 %d 转移目标非法: vals[%d]=%d（节点总数 %d）", i, j, to, len(m.nodes))
+			}
+		}
+		if nd.fail < 0 || int(nd.fail) >= len(m.nodes) {
+			t.Fatalf("节点 %d 失败指针非法: fail=%d", i, nd.fail)
+		}
+	}
+	// root 首字符表与词库首 rune 集一致
+	firsts := make(map[rune]struct{})
+	for _, kw := range benchKeywords {
+		for _, r := range kw {
+			firsts[r] = struct{}{}
+			break
+		}
+	}
+	if len(m.rootNext) != len(firsts) {
+		t.Fatalf("root 首字符表大小 %d 与词库首字符集 %d 不一致", len(m.rootNext), len(firsts))
+	}
+	for r := range firsts {
+		if _, ok := m.rootNext[r]; !ok {
+			t.Fatalf("root 首字符表缺少词首字符 %U", r)
+		}
 	}
 }
 

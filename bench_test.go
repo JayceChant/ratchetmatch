@@ -132,11 +132,7 @@ func naiveFindAll(m *Matcher, text string) []Match {
 	for pos < n {
 		// 与正式实现的唯一区别：不调用 m.skipForward，root 态也逐 rune 转移。
 		r, size := utf8.DecodeRuneInString(text[pos:])
-		if nxt, ok := m.nodes[state].next[r]; ok {
-			state = nxt
-		} else {
-			state = 0
-		}
+		state = m.step(state, r) // 二分转移，未含回 root，语义与全量表查找一致
 		pos += size
 		// 与正式实现一致：候选按长度降序，选第一个与 pending 兼容的
 		for _, l := range m.nodes[state].outLens {
