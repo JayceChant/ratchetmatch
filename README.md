@@ -1,0 +1,125 @@
+# ratchetsearch
+
+针对中文优化的 ACBM（Aho-Corasick + Boyer-Moore）多模式匹配库：一次构建词库自动机，对每条长文本单遍扫描，返回全部关键词命中。零第三方依赖，仅使用 Go 标准库。
+
+## 特性
+
+- **rune 级自动机**：按 Unicode 码点构建 Trie 与转移表，中文按整字符处理，绝不按 UTF-8 字节碎片转移
+- **查询期 O(1) 转移**：构建期将 Aho-Corasick 失败指针解析为全量转移自动机（等价 DFA），查询无运行时回退链
+- **BM 坏字符跳跃**：自动机处于 root 态时，用「词库 rune 集 + 256 位字节过滤器」批量跳过不可能出现匹配起始的文本段；中英混合文本约 1.4x 加速
+- **FindNext 首命中即停**：超长文本按需查找，找到即返回、不遍历剩余文本（基准约 10x）
+- **非重叠贪心语义**：先命中优先、同一起始位置前缀关系取最长；结果确定，与查找方式无关
+- **无锁并发**：`Matcher` 构建后只读，`FindAll` / `FindNext` 可并发调用（`-race` 验证）
+- **容错**：非法 UTF-8 文本不 panic、不漏扫后续内容
+
+## 安装
+
+要求 Go 1.27+。本仓库 module 名为 `ratchetsearch`：
+
+```bash
+go get ratchetsearch
+```
+
+> 发布到代码托管平台时，将 `go.mod` 的 module 名替换为实际仓库路径，并同步修改导入路径。
+
+## 快速上手：找出全部命中
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"ratchetsearch"
+)
+
+func main() {
+	matcher, err := ratchetsearch.New([]string{"上海", "北京", "广州", "深圳", "人工智能", "机器学习"})
+	if err != nil {
+		panic(err)
+	}
+	text := "上海的人工智能产业发展迅速。Beijing is the capital. 广州与深圳同属粤港澳大湾区，机器学习应用广泛。"
+	for _, m := range matcher.FindAll(text) {
+		fmt.Printf("%d-%d %s\n", m.Start, m.End, m.Keyword)
+	}
+	// 输出：
+	// 0-6 上海
+	// 9-21 人工智能
+	// 66-72 广州
+	// 75-81 深圳
+	// 108-120 机器学习
+}
+```
+
+注意 `Match.Start/End` 为 **text 中的字节偏移**（`[Start, End)` 半开区间），中文每字占 3 字节、ASCII 每字符占 1 字节；匹配是精确的字符串匹配，`Beijing` 不会命中中文关键词 `北京`。
+
+## 按需迭代：超长文本首命中即停
+
+`FindNext` 从 `offset` 开始查找第一个命中即终止扫描；用返回的 `Match.End` 作为下一次调用的 `offset` 迭代，得到的序列与 `FindAll` 完全一致。以下示例收集满 3 条就停止，其后的大段文本完全不会被扫描：
+
+```go
+matcher, err := ratchetsearch.New([]string{"上海", "北京", "人工智能", "机器学习"})
+if err != nil {
+	panic(err)
+}
+// 用拼接模拟长文档：2000 个噪声字（6000 字节）与关键词交替出现。
+noise := strings.Repeat("的在了是和有就不人都一", 200)
+text := noise + "上海" + noise + "人工智能" + noise + "机器学习" + noise + "北京" + noise
+
+first, ok := matcher.FindNext(text, 0)
+if !ok {
+	fmt.Println("无命中")
+	return
+}
+hits := []ratchetsearch.Match{first}
+off := first.End
+for len(hits) < 3 {
+	m, ok := matcher.FindNext(text, off)
+	if !ok {
+		break
+	}
+	hits = append(hits, m)
+	off = m.End
+}
+for _, m := range hits {
+	fmt.Printf("%d-%d %s\n", m.Start, m.End, m.Keyword)
+}
+// 输出：
+// 6600-6606 上海
+// 13206-13218 人工智能
+// 19818-19830 机器学习
+```
+
+## API
+
+| 标识 | 说明 |
+|---|---|
+| `New(keywords []string) (*Matcher, error)` | 构建不可变 `Matcher`。词库为空或含空字符串返回可区分的错误；重复关键词自动去重 |
+| `(*Matcher) FindAll(text string) []Match` | 返回全部命中，按 `Start` 升序；无命中或 text 为空返回 `nil` |
+| `(*Matcher) FindNext(text string, offset int) (Match, bool)` | 无状态按需查找：从 `offset`（字节偏移）返回首个命中，找到即终止。`offset < 0` 按 0 处理；`offset >= len(text)` 或无命中返回 `(Match{}, false)`；`offset` 落在多字节字符中间时向后对齐 rune 边界 |
+| `Match{Start, End int; Keyword string}` | 一次命中；`text[Start:End] == Keyword` 恒成立 |
+
+## 匹配语义（非重叠贪心）
+
+| 场景 | 词库 / 文本 | 输出 |
+|---|---|---|
+| 前缀关系取最长 | `{"中国", "中国人"}` / `"我是中国人"` | 仅 `中国人` |
+| 前缀未完整出现时取短词 | `{"中", "中毒"}` / `"中x"` | 仅 `中` |
+| 重叠取先命中者 | `{"上海", "海口"}` / `"上海口"` | 仅 `上海` |
+| 同结尾取更长 | `{"他", "其他"}` / `"其他"` | 仅 `其他` |
+| 不重叠按序全部输出 | `{"上海", "北京"}` / `"上海人北京"` | `上海`、`北京` |
+| 长词遮蔽下接续命中 | `{"国", "人", "中国人"}` / `"中国人"` | `国`、`人` |
+
+规则要点：命中之间互不重叠，每个文本位置至多属于一个命中；同一关键词同一位置至多输出一次。
+
+## 性能
+
+```bash
+go test -bench . -run '^$'
+```
+
+参考结论（详见 `bench_test.go`）：中英混合文本下坏字符跳跃约 1.4x 加速；`FindNext` 首命中即停对长文本约 10x。中文纯文本词密场景跳跃空间有限，收益趋于持平，属预期行为。
+
+## 设计文档
+
+算法原理、匹配语义与 API 契约的权威描述见 `spec/spec.md`；实现进度见 `spec/tasks.md`，验收清单见 `spec/checklist.md`。
