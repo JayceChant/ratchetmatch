@@ -29,9 +29,18 @@
   - `feat: 实现中文优化 ACBM 多模式匹配库`
   - `fix: 修复 maxOut 单值遮蔽导致的漏命中`
   - `docs: 补充 AGENTS.md 协作规范`
-- 提交前必须确认 `git status` 干净合理、`git diff` 只含本次任务的改动；**不提交**密钥、临时文件（`*.out`、`test_out.txt`、`bench_out.txt` 等已由 `.gitignore` 排除）。
+- 提交前必须确认 `git status` 干净合理、`git diff` 只含本次任务的改动；**不提交**密钥、临时文件（`*.out`、`test_out.txt`、`bench_out.txt`、`.env.local` 等已由 `.gitignore` 排除）。
 - 禁止 `--force` 推送、禁止改写历史；仅在被明确要求时推送远端。
-- Windows/PowerShell 环境下多行提交信息写入 `.git/COMMIT_MSG.txt`（UTF-8）后用 `git commit -F .git/COMMIT_MSG.txt` 提交，用完删除该临时文件；不要依赖 heredoc（PowerShell 不支持）。
+- 多行提交信息：POSIX shell（WSL / git bash）下可用 heredoc；PowerShell 不支持 heredoc，改写入 `.git/COMMIT_MSG.txt`（UTF-8）后 `git commit -F .git/COMMIT_MSG.txt`，用完删除该临时文件。
+- **提交信息环境中立**：commit message 中不得出现本地绝对路径，仅可使用相对项目根目录的路径。
+
+## 2.1 路径与环境的文档中立性（强制）
+
+- 凡**进入 git 提交的任何文档**（AGENTS.md、`spec/` 下三份文档、README、代码注释、commit message 等）：
+  - **禁止**出现本地绝对路径（盘符路径、`/home/...`、`/mnt/...`、`C:\Users\...` 等）与用户名、机器名等环境特定信息；
+  - **只允许**使用相对项目根目录的路径（如 `spec/spec.md`、`build.go`）；
+  - 仓库根目录本身在文档中一律表述为「项目根目录」或 `.`，不写实际盘符。
+- 本地绝对路径**唯一合法的存放处**是 `.env.local`（不提交）。
 
 ## 3. 代码与工程规范
 
@@ -53,12 +62,13 @@
 
 ## 4. 工作循环（每次任务必须遵守）
 
-1. **读 spec**：从 `spec/spec.md` 起手，明确需求边界与验收场景。
-2. **查进度**：读 `spec/tasks.md`，确认已完成/未完成任务，避免重复劳动。
-3. **最小实现**：只做被要求或显然必要的改动；不过度设计、不提前抽象。
-4. **自验证**：跑第 3 节全部命令；对照 `spec/checklist.md` 逐项核对。
-5. **更新文档**：勾选 tasks/checklist；行为变化同步更新 spec。
-6. **提交**：按第 2 节规范 git commit。
+1. **读环境**：读根目录 `.env.local`（存在则直接采用探测结论；缺失才重新探测并回写）。
+2. **读 spec**：从 `spec/spec.md` 起手，明确需求边界与验收场景。
+3. **查进度**：读 `spec/tasks.md`，确认已完成/未完成任务，避免重复劳动。
+4. **最小实现**：只做被要求或显然必要的改动；不过度设计、不提前抽象。
+5. **自验证**：跑第 3 节全部命令；对照 `spec/checklist.md` 逐项核对。
+6. **更新文档**：勾选 tasks/checklist；行为变化同步更新 spec。
+7. **提交**：按第 2 节规范 git commit。
 
 ## 5. 仓库结构
 
@@ -69,4 +79,6 @@ search.go          FindAll / FindNext / scan / skipForward
 *_test.go          单元测试、示例、基准
 spec/              规格文档（spec.md / tasks.md / checklist.md）
 AGENTS.md          本文件
+.env.local         本地环境 dotfile（不提交，gitignore 排除）
+.gitignore         排除临时产物与 .env.local
 ```

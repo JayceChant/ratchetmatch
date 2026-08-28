@@ -4,6 +4,9 @@ bench_out.txt
 *.out
 *.test
 
+# 本地环境 dotfile（含本地绝对路径，禁止提交；见 AGENTS.md Shell 环境规范）
+.env.local
+
 # IDE
 .idea/
 .vscode/
