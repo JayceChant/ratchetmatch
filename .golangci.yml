@@ -1,0 +1,35 @@
+# golangci-lint 配置 — 质量与维护开销的平衡，原则：
+#   1. 以官方 standard 默认集为准（errcheck/govet/staticcheck/unused），
+#      不追求全开、不引入需要长期 //nolint 维护的规则；
+#   2. 只增补零误报、高价值且当前即通过的轻量检查；
+#   3. formatter 只留 gofmt，与 AGENTS.md 第 3 节格式门槛完全一致，
+#      避免默认 gci/gofumpt 带来的额外风格分层；
+#   4. 出现告警优先修代码而非改配置。
+# v2 配置格式（golangci-lint >= 2.0，本机验证版本 2.13.2）
+
+version: "2"
+
+run:
+  timeout: 3m
+
+linters:
+  # standard = errcheck + govet + staticcheck + unused
+  default: standard
+  enable:
+    - copyloopvar    # Go 1.22+ 循环变量语义下仍写 &v / 显式拷贝的老写法
+    - ineffassign    # 对已有变量的无效赋值（赋值后从未读取）
+    - misspell       # 英文拼写错误（中文注释不受影响）
+    - nakedret       # 裸 return 携带返回值的可读性陷阱
+    - predeclared    # 遮蔽预声明标识符（len/new/copy 等）
+    - unconvert      # 无必要的类型转换
+    - whitespace     # 控制块首尾多余空行（gofmt 不管的纵向问题）
+
+formatters:
+  # v2 默认 formatter 集为 gofmt+gci+gofumpt，这里显式收敛为仅 gofmt
+  default: none
+  enable:
+    - gofmt
+
+issues:
+  # 不设每 linter 的告警展示上限：告警应被修复而非截断
+  uniq-by-line: true

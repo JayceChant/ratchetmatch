@@ -48,7 +48,9 @@
 - **格式与静态检查**：任何改动提交前必须通过：
   ```powershell
   go build ./... ; go vet ./... ; gofmt -l .   # gofmt -l 必须无输出
+  golangci-lint run                              # 0 issues（配置见 .golangci.yml）
   ```
+  golangci-lint 配置原则：官方 standard 默认集 + 少量零误报增补，formatter 仅 gofmt；出现告警优先修代码而非改配置。
 - **测试门槛**：涉及源码改动的提交必须通过：
   ```powershell
   go test ./... -count=1
@@ -79,6 +81,7 @@ search.go          FindAll / FindNext / scan / skipForward
 *_test.go          单元测试、示例、基准
 spec/              规格文档（spec.md / tasks.md / checklist.md）
 AGENTS.md          本文件
+.golangci.yml      golangci-lint 配置（standard 集 + 少量增补）
 .env.local         本地环境 dotfile（不提交，gitignore 排除）
 .gitignore         排除临时产物与 .env.local
 ```
