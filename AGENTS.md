@@ -76,6 +76,7 @@ build.go           Trie 构建、失败指针、稀疏转移自动机、BM 跳�
 search.go          FindAll / FindAllOverlapping / FindNext / scan / skipForward
 *_test.go          单元测试、示例、基准、fuzz（testdata/fuzz/ 存回归样本）
 spec/              规格文档（spec.md / tasks.md / checklist.md）
+LICENSE            MIT 许可证（宽松许可，不含专利条款）
 AGENTS.md          本文件
 .golangci.yml      golangci-lint 配置
 .env.win/.env.wsl  本地环境 dotfile（按环境取用，不提交，gitignore 排除）

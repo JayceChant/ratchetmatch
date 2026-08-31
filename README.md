@@ -73,3 +73,7 @@ go test -bench . -run '^$'
 Bad-character skipping gives ~1.4x speedup on mixed Chinese/English text; `FindNext` first-hit-stop is ~10x on long texts. On pure Chinese text with dense keywords, skip opportunities are limited and gains level off — expected behavior.
 
 For the authoritative description of algorithm principles, API contracts, and acceptance scenarios, see `spec/spec.md`.
+
+## License
+
+Released under the [MIT License](LICENSE).
