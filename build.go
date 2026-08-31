@@ -12,12 +12,14 @@ type node struct {
 	outLens []int32 // 以当前状态结束的全部关键词字节长度，严格降序（自身 + 失败链继承）；nil 表示无
 }
 
-// builder 聚集构建期状态：root 单独持有（其 map 即词库首字符表，成品直接
-// 复用为 Matcher.rootNext，兼任跳跃判断集）；其余节点的 trie 边在 flatten
-// 展平为 CSR 数组后随 builder 一并回收。
+// builder 聚集构建期状态：root 即 nodes[0]（下标 0 = root，其余节点从 1 起，
+// 与成品 Matcher.nodes 下标完全一致），root 的 children map 成品直接复用为
+// Matcher.rootNext，兼任跳跃判断集。
+// 注意：insert 阶段会 append 扩容 nodes，底层数组可能重新分配，故不可跨
+// append 缓存 &b.nodes[i]，一律按下标访问（BFS/flatten 阶段不再 append，
+// 局部指针安全）。
 type builder struct {
-	root  *trieNode
-	nodes []trieNode // nodes[0] 为 root 占位（未用），真正根在 root 字段
+	nodes []trieNode
 }
 
 // trieNode 构建期节点：children 即自有 trie 边。
@@ -28,59 +30,45 @@ type trieNode struct {
 	outLens  []int32
 }
 
-// newBuilder 创建只含 root 的 builder。root 用独立 map 存孩子（成品的
-// Matcher.rootNext），其余节点复用同一数组布局，root 在 nodes[0] 占位以便
-// 节点下标与 fail 语义统一（fail 指向 0 即 root）。
+// newBuilder 创建只含 root（nodes[0]）的 builder。
 func newBuilder(capHint int) *builder {
-	b := &builder{
-		root:  &trieNode{children: make(map[rune]int32)},
-		nodes: make([]trieNode, 1, capHint+1),
-	}
+	b := &builder{nodes: make([]trieNode, 1, capHint+1)}
+	b.nodes[0].children = make(map[rune]int32)
 	return b
 }
 
-// insert 从 cur 经 rune r 下行，孩子不存在则新建。
+// insert 从 cur 经 rune r 下行，孩子不存在则新建（cur==0 即 root，同一路径）。
 func (b *builder) insert(cur int32, r rune) int32 {
-	if cur == 0 {
-		if t, ok := b.root.children[r]; ok {
-			return t
-		}
-		t := int32(len(b.nodes))
-		b.nodes = append(b.nodes, trieNode{children: make(map[rune]int32)})
-		b.root.children[r] = t
-		return t
-	}
 	if t, ok := b.nodes[cur].children[r]; ok {
 		return t
 	}
 	t := int32(len(b.nodes))
 	b.nodes = append(b.nodes, trieNode{children: make(map[rune]int32)})
-	b.nodes[cur].children[r] = t
+	b.nodes[cur].children[r] = t // append 可能扩容，须重新按 cur 下标访问
 	return t
 }
 
 // gotoWithFail 返回状态 s 在 rune r 上的转移目标（带失败指针回退）。
-// 先查 s 的自有边，未命中沿 fail 链逐级回退重试；到 root 查 root 的孩子表，
-// 仍未含则返回 0（留在 root）。构建期失败指针计算与查询期 step 同一语义。
+// 先查 s 的自有边，未命中沿 fail 链逐级回退重试；到 root（nodes[0]）查其
+// 孩子表，仍未含则返回 0（留在 root）。构建期失败指针计算与查询期 step 同一语义。
 // BFS 约束保证 s 的 fail 指向更浅节点、其 fail 已算好，回退安全。
 func (b *builder) gotoWithFail(s int32, r rune) int32 {
-	for s != 0 {
+	for {
 		if t, ok := b.nodes[s].children[r]; ok {
 			return t
 		}
+		if s == 0 {
+			return 0
+		}
 		s = b.nodes[s].fail
 	}
-	if t, ok := b.root.children[r]; ok {
-		return t
-	}
-	return 0
 }
 
 // buildAutomaton 用 BFS 计算失败指针与输出信息。
 // BFS 按层处理，处理某节点时其失败指针指向的更浅节点必已算好。
 func (b *builder) buildAutomaton() {
 	queue := make([]int32, 0, len(b.nodes))
-	for _, c := range b.root.children { // root 的孩子 fail 一律为 root
+	for _, c := range b.nodes[0].children { // root（nodes[0]）的孩子 fail 一律为 root
 		b.nodes[c].fail = 0
 		queue = append(queue, c)
 	}

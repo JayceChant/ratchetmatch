@@ -69,6 +69,6 @@ func New(keywords []string) (*Matcher, error) {
 	}
 	b.buildAutomaton()
 	m.nodes, m.transKeys, m.transVals = b.flatten()
-	m.rootNext = b.root.children
+	m.rootNext = b.nodes[0].children
 	return m, nil
 }
