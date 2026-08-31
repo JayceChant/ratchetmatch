@@ -222,6 +222,7 @@ func TestChineseMatching(t *testing.T) {
 // 3. 非重叠贪心语义
 // ---------------------------------------------------------------------------
 
+// TestGreedySemantics 验证非重叠最左最长语义（leftmost-longest）。
 func TestGreedySemantics(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -232,16 +233,25 @@ func TestGreedySemantics(t *testing.T) {
 		// "我是中国人"：我是 6 字节，"中国人" = [6,15)
 		{"前缀取最长", []string{"中国", "中国人"}, "我是中国人", []Match{{6, 15, "中国人"}}},
 		{"前缀未完整出现取短词", []string{"中", "中毒"}, "中x", []Match{{0, 3, "中"}}},
-		{"重叠取先命中", []string{"上海", "海口"}, "上海口", []Match{{0, 6, "上海"}}},
+		{"重叠取更左", []string{"上海", "海口"}, "上海口", []Match{{0, 6, "上海"}}},
 		{"同结尾取更长", []string{"他", "其他"}, "其他", []Match{{0, 6, "其他"}}},
 		// 上海=[0,6) 人=[6,9) 北京=[9,15)
 		{"不重叠全输出", []string{"上海", "北京"}, "上海人北京", []Match{{0, 6, "上海"}, {9, 15, "北京"}}},
 		{"嵌套前缀链", []string{"a", "ab", "abc"}, "xabcx", []Match{{1, 4, "abc"}}},
 		{"连续同词", []string{"a", "ab"}, "abab", []Match{{0, 2, "ab"}, {2, 4, "ab"}}},
-		// "国" 先命中 [3,6)；"中国人" [0,9) 与之重叠被跳过后，
-		// 同位置结束的 "人" [6,9) 起始不早于 6，应当接续命中
-		{"长词遮蔽下接续命中", []string{"国", "人", "中国人"}, "中国人",
-			[]Match{{3, 6, "国"}, {6, 9, "人"}}},
+		// 真包含关系一律取最长："中国人"(0,9) 起点最左，遮蔽 "国"(3,6) 与 "人"(6,9)
+		{"真包含取最长", []string{"国", "人", "中国人"}, "中国人",
+			[]Match{{0, 9, "中国人"}}},
+		// 断词结算："梦" 与 "人" 不匹配 → "中国人" 断词，fail 规则结算 "国"(3,6)
+		{"断词后fail结算短词", []string{"国", "人", "中国人"}, "中国梦",
+			[]Match{{3, 6, "国"}}},
+		// 更左候选逐级弹出链尾：a(start=2)→被 ba(1) 弹出→被 cba(0) 弹出
+		{"逐级弹出至最左", []string{"a", "ba", "cba"}, "cba",
+			[]Match{{0, 3, "cba"}}},
+		// 长词断词后，其内部短词按最左最长独立结算："中国人" 断于 "梦"，
+		// [0,9) "中国人" 已入链；随后 root 重新扫描，无更左候选 → 输出 "中国人"
+		{"断词后短词独立结算", []string{"国", "人", "中国人"}, "中国人梦国人",
+			[]Match{{0, 9, "中国人"}, {12, 15, "国"}, {15, 18, "人"}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -351,20 +361,16 @@ func TestFindNextIterateEqualsFindAll(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // naiveSearch 是朴素参照实现：用 strings.Index 暴力枚举出全部出现位置，
-// 再按实现的 pending 语义做贪心筛选。它不依赖自动机与 BM 跳跃，
+// 再按 leftmost-longest 语义做贪心筛选。它不依赖自动机与 BM 跳跃，
 // 因此 FindAll 与其结果一致即说明 AC 状态转移与跳跃优化均无漏报/误报。
 //
-// 语义要点（与 search.go 中 scan 的规则逐条对应，二者等价正是被本测试验证的命题）：
-//  1. 候选按「结束位置」升序到达；同一结束位置按关键词长度降序逐个尝试，
-//     选第一个与 pending 兼容的候选（优先最长；最长者重叠则尝试更短者）；
-//  2. 新候选与当前候选同一起始位置 → 替换为更长者（前缀关系取最长）；
-//  3. 新候选起始位置不早于当前候选结束 → 提交当前候选，新候选接任；
-//  4. 其余（与 pending 重叠）→ 跳过该候选、继续尝试更短者。
-//
-// 注：最初按直觉写成「start 升序、end 降序」的标准区间贪心（最左最长贪心），
-// 随机对照发现与实现不一致——那是另一种同样自洽但不同的贪心语义。
-// 实现采用的是「先命中（先结束）优先」语义，故参照改为按结束位置排序以
-// 匹配实现的文档语义。
+// leftmost-longest 筛选（与 search.go 中 scan 的链规则等价，正是被本测试验证的命题）：
+//  1. 候选按「结束位置」升序、同结束位置按长度降序逐个到达；
+//  2. 维护一条「起点升序、互不重叠」的待提交链：
+//     新候选起点 < 链尾起点 → 弹出链尾（被更左者覆盖）；
+//     新候选起点 == 链尾起点 → 取更长；
+//     新候选起点 >= 链尾结束 → 入链接续；
+//     其余（重叠且起点更晚）→ 丢弃。
 func naiveSearch(keywords []string, text string) []Match {
 	type occ struct{ start, end int }
 	// 枚举每个关键词的全部（可重叠）出现位置
@@ -387,24 +393,30 @@ func naiveSearch(keywords []string, text string) []Match {
 		}
 		return occs[a].end-occs[a].start > occs[b].end-occs[b].start
 	})
-	// 与 scan 的 pending 规则逐条对应地筛选
+	// 与 scan 的链规则逐条对应地筛选
 	var out []Match
-	pend := occ{start: -1, end: -1}
+	var chain []occ
 	for _, o := range occs {
+		for len(chain) > 0 && o.start < chain[len(chain)-1].start {
+			chain = chain[:len(chain)-1] // 链尾被更左候选覆盖，弹出
+		}
+		if len(chain) == 0 {
+			chain = append(chain, o)
+			continue
+		}
+		tail := &chain[len(chain)-1]
 		switch {
-		case pend.start < 0:
-			pend = o
-		case o.start == pend.start:
-			pend.end = o.end // 同一起始位置：取最长
-		case o.start >= pend.end:
-			out = append(out, Match{pend.start, pend.end, text[pend.start:pend.end]})
-			pend = o
-		default:
-			// 与 pending 重叠：先命中优先，跳过（继续尝试更短的候选）
+		case o.start == tail.start: // 同一起点：取更长
+			if o.end > tail.end {
+				tail.end = o.end
+			}
+		case o.start >= tail.end: // 不重叠：入链接续
+			chain = append(chain, o)
+		default: // 与链尾重叠且起点更晚：被遮蔽，丢弃
 		}
 	}
-	if pend.start >= 0 {
-		out = append(out, Match{pend.start, pend.end, text[pend.start:pend.end]})
+	for _, p := range chain {
+		out = append(out, Match{p.start, p.end, text[p.start:p.end]})
 	}
 	return out
 }

@@ -110,48 +110,59 @@ func buildMixedText(n int) string {
 	return b.String()
 }
 
-// naiveFindAll 是 search.go 中 scan 的「无跳跃」参照实现：逐 rune 解码并查
-// m.nodes[state].next 完成转移（state==0 时也不调用 skipForward，照常解码转移），
-// pending 贪心收集逻辑与正式实现完全一致，用于量化 Boyer-Moore 跳跃的收益。
+// naiveFindAll 是 search.go 中 scan 的「无跳跃」参照实现：逐 rune 解码并做
+// 段内查找 + fail 回退（state==0 时也不调用 skipForward，照常解码转移），
+// 最左最长链收集逻辑与正式实现完全一致，用于量化 Boyer-Moore 跳跃的收益。
 func naiveFindAll(m *Matcher, text string) []Match {
 	n := len(text)
 	pos := 0
 	var state int32
-	var pendStart, pendLen int32
+	var chain []pendHit // 待提交链（与 scan 相同的规则；基准中无需内联数组优化）
 	var out []Match
-	flush := func() {
-		if pendLen == 0 {
-			return
-		}
-		out = append(out, Match{
-			Start:   int(pendStart),
-			End:     int(pendStart + pendLen),
-			Keyword: text[pendStart : pendStart+pendLen],
-		})
-	}
 	for pos < n {
 		// 与正式实现的唯一区别：不调用 m.skipForward，root 态也逐 rune 转移。
 		r, size := utf8.DecodeRuneInString(text[pos:])
-		state = m.step(state, r) // 二分转移，未含回 root，语义与全量表查找一致
+		state = m.step(state, r) // 段内查找 + fail 回退，语义与正式实现一致
 		pos += size
-		// 与正式实现一致：候选按长度降序，选第一个与 pending 兼容的
+		// 与正式实现一致：最左最长链规则（更左弹出链尾、同起点取更长、
+		// 不重叠入链、其余遮蔽）；自动机回 root 或扫描结束时提交整链
 		for _, l := range m.nodes[state].outLens {
-			cs := int32(pos) - l
-			switch {
-			case pendLen == 0:
-				pendStart, pendLen = cs, l
-			case cs == pendStart:
-				pendLen = l
-			case cs >= pendStart+pendLen:
-				flush()
-				pendStart, pendLen = cs, l
-			default:
+			cs, ce := int32(pos)-l, int32(pos)
+			for len(chain) > 0 && cs < chain[len(chain)-1].start {
+				chain = chain[:len(chain)-1]
+			}
+			if len(chain) == 0 {
+				chain = append(chain, pendHit{cs, ce})
 				continue
 			}
-			break
+			tail := &chain[len(chain)-1]
+			switch {
+			case cs == tail.start:
+				if ce > tail.end {
+					tail.end = ce
+				}
+			case cs >= tail.end:
+				chain = append(chain, pendHit{cs, ce})
+			}
+		}
+		if state == 0 {
+			for _, p := range chain {
+				out = append(out, Match{
+					Start:   int(p.start),
+					End:     int(p.end),
+					Keyword: text[p.start:p.end],
+				})
+			}
+			chain = chain[:0]
 		}
 	}
-	flush()
+	for _, p := range chain {
+		out = append(out, Match{
+			Start:   int(p.start),
+			End:     int(p.end),
+			Keyword: text[p.start:p.end],
+		})
+	}
 	return out
 }
 

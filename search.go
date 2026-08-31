@@ -46,7 +46,7 @@ func (m *Matcher) find(s int32, r rune) int32 {
 	return 0
 }
 
-// FindAll 返回 text 中所有命中（非重叠贪心：先命中优先；同一起始位置前缀关系取最长），
+// FindAll 返回 text 中所有命中（非重叠最左最长：起点最小优先；同一起点前缀关系取最长），
 // 按出现先后（Start 升序）排序；无命中或 text 为空返回 nil。
 func (m *Matcher) FindAll(text string) []Match {
 	var out []Match
@@ -84,26 +84,45 @@ func (m *Matcher) FindNext(text string, offset int) (Match, bool) {
 	return found, ok
 }
 
+// pendHit 是待提交链上的一个已确定区间、尚未落袋的候选命中。
+type pendHit struct {
+	start, end int32
+}
+
 // scan 从 from 开始单遍扫描（自动机从 root 起步）；每确定一个最终命中调用 emit，
 // emit 返回 false 时立即停止。文本指针单调前进、绝不回退。
-// 贪心语义用 pending 机制实现：候选按结束位置先后到达（每个结束位置的候选按长度降序）：
-//   - 新候选与 pending 同一起始位置（前缀关系）→ 替换（取最长）
-//   - 新候选起始 >= pending 结束（不重叠）→ 提交 pending，新候选成为 pending
-//   - 其余（重叠且起始更晚，或提交后更晚结束的超长串）→ 丢弃新候选（先命中优先）
+//
+// 最左最长（leftmost-longest）语义经「待提交链」实现：候选按结束位置升序到达
+// （同一结束位置的候选按长度降序，来自 outLens），链内起点升序、互不重叠：
+//   - 候选起点 < 链尾起点：候选更左，弹出链尾（被覆盖）后继续比较
+//   - 候选起点 == 链尾起点：取更长（真包含关系一律输出最长）
+//   - 候选起点 >= 链尾结束（不重叠）：入链接续
+//   - 其余（与链尾重叠且起点更晚）：被链尾遮蔽，丢弃
+//
+// 提交时机：自动机回到 root 或扫描结束时提交整链。root 时刻的安全性：
+// 若存在「起点 ≤ 当前 pos 而结束于其后」的候选，其前缀仍是词库前缀，
+// 与 state==0 矛盾——故此刻链不会再被任何更左候选覆盖。
+// 如词库 {国,人,中国人} 的文本 "中国人"："国" 先入链，"中国人"(起点更左)
+// 到达时弹出 "国" 与 "人"，最终仅输出 "中国人"；文本 "中国梦" 中 "国"
+// 则在断词回到 root 时结算输出。
 func (m *Matcher) scan(text string, from int, emit func(Match) bool) {
 	n := len(text)
 	pos := from
 	var state int32
-	var pendStart, pendLen int32 // pendLen==0 表示无未提交候选
+	var inline [4]pendHit // 待提交链常规 ≤4 条，栈上内联零分配
+	chain := inline[:0]   // 溢出（连续不重叠命中且长期不回 root）时 append 转堆
 	flush := func() bool {
-		if pendLen == 0 {
-			return true
+		for _, p := range chain {
+			if !emit(Match{
+				Start:   int(p.start),
+				End:     int(p.end),
+				Keyword: text[p.start:p.end],
+			}) {
+				return false
+			}
 		}
-		return emit(Match{
-			Start:   int(pendStart),
-			End:     int(pendStart + pendLen),
-			Keyword: text[pendStart : pendStart+pendLen],
-		})
+		chain = chain[:0]
+		return true
 	}
 	for pos < n {
 		if state == 0 {
@@ -115,27 +134,29 @@ func (m *Matcher) scan(text string, from int, emit func(Match) bool) {
 		r, size := utf8.DecodeRuneInString(text[pos:])
 		state = m.step(state, r)
 		pos += size
-		// 该结束位置的全部候选按长度降序（outLens）；选第一个与 pending 兼容的：
-		// 贪心语义——优先最长；若最长者与 pending 重叠则尝试更短者，
-		// 使「命中后跳到结尾继续」的语义在长词遮蔽短词的场景下仍然成立
-		// （如词库 {国,人,中国人} 的文本 "中国人"：先命中 "国"，随后 "中国人"
-		// 与之重叠被丢弃，但同位置结束的 "人" 起始恰在其后，应当命中）。
+		// 以 pos 结束的候选按长度降序（outLens 降序保证更左者先处理）
 		for _, l := range m.nodes[state].outLens {
-			cs := int32(pos) - l
-			switch {
-			case pendLen == 0:
-				pendStart, pendLen = cs, l
-			case cs == pendStart:
-				pendLen = l // 同一起始位置：前缀关系取最长
-			case cs >= pendStart+pendLen:
-				if !flush() {
-					return
-				}
-				pendStart, pendLen = cs, l
-			default:
-				continue // 重叠且起始更晚：先命中优先，尝试更短候选
+			cs, ce := int32(pos)-l, int32(pos)
+			for len(chain) > 0 && cs < chain[len(chain)-1].start {
+				chain = chain[:len(chain)-1] // 链尾被更左候选覆盖，弹出
 			}
-			break
+			if len(chain) == 0 {
+				chain = append(chain, pendHit{cs, ce})
+				continue
+			}
+			tail := &chain[len(chain)-1]
+			switch {
+			case cs == tail.start:
+				if ce > tail.end { // 同起点取更长（真包含取最长）
+					tail.end = ce
+				}
+			case cs >= tail.end: // 不重叠：入链接续
+				chain = append(chain, pendHit{cs, ce})
+			default: // 与链尾重叠且起点更晚：被遮蔽
+			}
+		}
+		if state == 0 && !flush() { // 安全提交点（见函数注释证明）
+			return
 		}
 	}
 	flush()
