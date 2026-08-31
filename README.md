@@ -1,26 +1,28 @@
 # ratchetsearch
 
-针对中文优化的 ACBM（Aho-Corasick + Boyer-Moore）多模式匹配库：一次构建词库自动机，对每条长文本单遍扫描，返回全部关键词命中。零第三方依赖，仅使用 Go 标准库。
+**English** | [简体中文](README_CN.md)
 
-## 适用范围
+An ACBM (Aho-Corasick + Boyer-Moore) multi-pattern matching library optimized for Chinese text: build the keyword automaton once, scan each long text in a single pass, and get every keyword hit. Zero third-party dependencies, Go standard library only.
 
-**适合**：词库固定、目标文本多变——一次 `New` 构建后，对大量长文本反复查询（内容过滤、审计、风控等流式扫描场景）。
+## When to Use
 
-**不适合**：目标文本固定、关键词多变——此时更应对目标文本做一次性预处理（如关键词倒排索引），按关键词查询而非按文本扫描。
+**Suitable**: fixed keyword dictionary, varying target texts — build once with `New`, then query many long texts repeatedly (content filtering, auditing, risk control, and other streaming scan scenarios).
 
-## 设计与权衡
+**Not suitable**: fixed target text, varying keywords — in that case, preprocess the target text once (e.g., an inverted keyword index) and query by keyword instead of scanning by text.
 
-- **rune 级自动机**：按 Unicode 码点构建 Trie 与转移表，中文按整字符转移，绝不按 UTF-8 字节碎片转移。
-- **稀疏转移表 + 失败指针回退**（而非 DFA 全量转移表）：节点仅存自有 trie 边，展平进全局有序数组；查询期段内查找未命中沿失败链回退，摊还 O(1)。全量表在中文大字符集下每节点膨胀至 root 扇出（~百键），内存不可接受，已实测废弃。
-- **BM 坏字符跳跃**：自动机处于 root 态时，用「词库首字符集 + 256 位字节过滤器」批量跳过不可能出现匹配起始的文本段，中英混合文本约 1.4x 加速（任何匹配的起始 rune 必为词首字符，跳跃判据等价安全、不漏报）。
-- **位置按字节计量**：`Match.Start/End` 为字节偏移，`text[Start:End]` 可直接切片取关键词。不提供 rune 下标 API——`[]rune` 预转换会使 ASCII 文本瞬时内存 +300%、跳跃与首停优化失效。
-- **非重叠最左最长语义**：起点最小优先、同一起点取最长（真包含关系一律输出最长匹配）；结果确定，与查找方式无关。
-- **无锁并发**：`Matcher` 构建后只读，内部为紧凑连续数组布局（近乎无指针），查询零分配，Go GC 标记成本接近常数——适合词库常驻内存数月的服务。
-- **容错**：非法 UTF-8 文本不 panic、不漏扫后续内容。
+## Design & Trade-offs
 
-## 快速上手
+- **Rune-level automaton**: the Trie and transition tables are built on Unicode code points; Chinese characters transition as whole characters, never as fragmented UTF-8 bytes.
+- **Sparse transition table + fail-pointer fallback** (instead of a full DFA transition table): each node stores only its own trie edges, flattened into a global sorted array; at query time, a segment miss falls back along the failure chain, amortized O(1). A full table bloats every node to the root's fan-out (~hundreds of keys) under the large Chinese character set — memory-prohibitive; measured and abandoned.
+- **BM bad-character skip**: while the automaton is at the root state, a "dictionary first-character set + 256-bit byte filter" batch-skips text segments where no match can start, ~1.4x speedup on mixed Chinese/English text (the starting rune of any match must be a keyword's first character, so the skip criterion is provably safe — no missed hits).
+- **Byte-based positions**: `Match.Start/End` are byte offsets, so `text[Start:End]` slices out the keyword directly. No rune-index API — `[]rune` pre-conversion would instantly add +300% memory for ASCII text and defeat the skip and first-hit optimizations.
+- **Non-overlapping leftmost-longest semantics**: the smallest start wins; at the same start, the longest keyword occurring in full wins (proper containment always yields the longest match); results are deterministic regardless of how they are found.
+- **Lock-free concurrency**: `Matcher` is read-only after construction, laid out as compact contiguous arrays (nearly pointer-free); queries are allocation-free, keeping Go GC marking cost near-constant — suitable for services that keep a dictionary resident in memory for months.
+- **Robustness**: invalid UTF-8 text never panics and never skips subsequent content.
 
-要求 Go 1.27+，module 名 `ratchetsearch`（发布到托管平台时替换为实际仓库路径）。
+## Quick Start
+
+Requires Go 1.27+; module name `ratchetsearch` (replace with the actual repository path when publishing to a hosting platform).
 
 ```go
 matcher, err := ratchetsearch.New([]string{"上海", "北京", "人工智能", "机器学习"})
@@ -28,46 +30,46 @@ if err != nil {
 	panic(err)
 }
 for _, m := range matcher.FindAll(text) {
-	fmt.Printf("%d-%d %s\n", m.Start, m.End, m.Keyword) // Start/End 为字节偏移
+	fmt.Printf("%d-%d %s\n", m.Start, m.End, m.Keyword) // Start/End are byte offsets
 }
 ```
 
-完整可运行示例（含输出）见 `example_test.go`。中文每字占 3 字节、ASCII 每字符 1 字节；匹配是精确匹配，`Beijing` 不会命中 `北京`。需要字符序号时用 `utf8.RuneCountInString(text[:m.Start])` 换算。
+For a complete runnable example (with output) see `example_test.go`. Each Chinese character occupies 3 bytes and each ASCII character 1 byte; matching is exact — `Beijing` does not match `北京`. To get character ordinals, convert with `utf8.RuneCountInString(text[:m.Start])`.
 
-## 按需迭代：超长文本首命中即停
+## On-Demand Iteration: First-Hit-Early-Stop for Very Long Texts
 
-`FindNext(text, offset)` 从 `offset` 返回首个命中即终止扫描；用返回的 `Match.End` 作为下一次 `offset` 迭代，序列与 `FindAll` 完全一致——只需前几条时，其后的大段文本完全不会被扫描（长文本基准约 10x）。
+`FindNext(text, offset)` returns the first hit from `offset` and stops scanning immediately; iterate by feeding the returned `Match.End` back as the next `offset` — the sequence is identical to `FindAll`. When you only need the first few hits, the rest of the long text is never scanned (~10x on long-text benchmarks).
 
 ## API
 
-| 标识 | 说明 |
+| Identifier | Description |
 |---|---|
-| `New(keywords []string) (*Matcher, error)` | 构建不可变 `Matcher`。词库为空、含空串、含非法 UTF-8 或 U+FFFD 字节返回可区分的错误；重复关键词去重 |
-| `(*Matcher) FindAll(text string) []Match` | 全部命中，按 `Start` 升序；无命中返回 `nil` |
-| `(*Matcher) FindAllOverlapping(text string) []Match` | 全部出现（含互相重叠者），按 `End` 升序、同 `End` 长度降序；适合词频统计、索引构建，开销输出敏感 O(n+K) |
-| `(*Matcher) FindNext(text string, offset int) (Match, bool)` | 从 `offset` 返回首个命中，找到即停。`offset<0` 按 0；`>=len(text)` 或无命中返回 `(Match{}, false)`；落在多字节字符中间时向后对齐 rune 边界 |
-| `Match{Start, End int; Keyword string}` | 一次命中；`text[Start:End] == Keyword` 恒成立 |
+| `New(keywords []string) (*Matcher, error)` | Builds an immutable `Matcher`. Returns distinguishable errors for an empty dictionary, empty strings, invalid UTF-8, or U+FFFD bytes in keywords; duplicate keywords are deduplicated |
+| `(*Matcher) FindAll(text string) []Match` | All hits, ascending by `Start`; returns `nil` when nothing matches |
+| `(*Matcher) FindAllOverlapping(text string) []Match` | All occurrences (including mutually overlapping ones), ascending by `End`, longest first at equal `End`; suitable for term-frequency counting and index building, output-sensitive O(n+K) cost |
+| `(*Matcher) FindNext(text string, offset int) (Match, bool)` | Returns the first hit from `offset`, stopping as soon as one is found. `offset<0` is treated as 0; `>=len(text)` or no hit returns `(Match{}, false)`; an offset landing inside a multi-byte character is aligned forward to a rune boundary |
+| `Match{Start, End int; Keyword string}` | One hit; `text[Start:End] == Keyword` always holds |
 
-## 匹配语义（非重叠最左最长）
+## Matching Semantics (Non-Overlapping Leftmost-Longest)
 
-从左到右，起点最小者优先；同一起点取完整出现的最长关键词。命中之间互不重叠、不留空档，每个文本位置至多属于一个命中。
+Scan left to right: the smallest start wins; at the same start, the longest keyword occurring in full wins. Hits never overlap and leave no gaps; each text position belongs to at most one hit.
 
-| 场景 | 词库 / 文本 | 输出 |
+| Scenario | Dictionary / Text | Output |
 |---|---|---|
-| 前缀关系取最长 | `{"中国", "中国人"}` / `"我是中国人"` | 仅 `中国人` |
-| 前缀未完整出现时取短词 | `{"中", "中毒"}` / `"中x"` | 仅 `中` |
-| 重叠时起点更左者胜 | `{"上海", "海口"}` / `"上海口"` | 仅 `上海` |
-| 不重叠按序全部输出 | `{"上海", "北京"}` / `"上海人北京"` | `上海`、`北京` |
-| 真包含关系一律取最长 | `{"国", "人", "中国人"}` / `"中国人"` | 仅 `中国人` |
+| Prefix relation → longest | `{"中国", "中国人"}` / `"我是中国人"` | only `中国人` |
+| Prefix not fully present → shorter word | `{"中", "中毒"}` / `"中x"` | only `中` |
+| Overlap → leftmost start wins | `{"上海", "海口"}` / `"上海口"` | only `上海` |
+| Non-overlapping → all, in order | `{"上海", "北京"}` / `"上海人北京"` | `上海`, `北京` |
+| Proper containment → always longest | `{"国", "人", "中国人"}` / `"中国人"` | only `中国人` |
 
-需要**全部出现**（含互相重叠）时用 `FindAllOverlapping`：如词库 `{"国", "人", "中国人"}` 在 `"中国人"` 上返回 3 条。该模式无 `FindNext` 版本（重叠语义与无状态按需迭代不兼容）。
+When you need **all occurrences** (including overlapping ones), use `FindAllOverlapping`: e.g., dictionary `{"国", "人", "中国人"}` on `"中国人"` returns 3 hits. This mode has no `FindNext` variant (overlapping semantics is incompatible with stateless on-demand iteration).
 
-## 性能
+## Performance
 
 ```bash
 go test -bench . -run '^$'
 ```
 
-中英混合文本下坏字符跳跃约 1.4x 加速；`FindNext` 首停对长文本约 10x。中文纯文本词密场景跳跃空间有限，收益趋于持平，属预期行为。
+Bad-character skipping gives ~1.4x speedup on mixed Chinese/English text; `FindNext` first-hit-stop is ~10x on long texts. On pure Chinese text with dense keywords, skip opportunities are limited and gains level off — expected behavior.
 
-算法原理、API 契约与验收场景的权威描述见 `spec/spec.md`。
+For the authoritative description of algorithm principles, API contracts, and acceptance scenarios, see `spec/spec.md`.
