@@ -59,6 +59,8 @@ func main() {
 
 注意 `Match.Start/End` 为 **text 中的字节偏移**（`[Start, End)` 半开区间），中文每字占 3 字节、ASCII 每字符占 1 字节；匹配是精确的字符串匹配，`Beijing` 不会命中中文关键词 `北京`。
 
+需要字符序号（第几个字）时，用 `utf8.RuneCountInString(text[:m.Start])` 按需换算即可。本库刻意不提供 rune 下标 API：匹配算法本身按字符（rune）转移，仅位置/长度用字节计量，这样 `text[m.Start:m.End]` 可直接切片取关键词，也让「不解码就跳过无关节节」的跳跃优化和 FindNext 的找到即停发挥最大效果。
+
 ## 按需迭代：超长文本首命中即停
 
 `FindNext` 从 `offset` 开始查找第一个命中即终止扫描；用返回的 `Match.End` 作为下一次调用的 `offset` 迭代，得到的序列与 `FindAll` 完全一致。以下示例收集满 3 条就停止，其后的大段文本完全不会被扫描：
