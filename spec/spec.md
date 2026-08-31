@@ -8,6 +8,7 @@
 - 核心公共 API：
   - `New(keywords []string) (*Matcher, error)`：构建不可变 Matcher
   - `(*Matcher) FindAll(text string) []Match`：返回全部命中（按 Start 升序）
+  - `(*Matcher) FindAllOverlapping(text string) []Match`：重叠全量返回（全部出现，含互相重叠者；按 End 升序、同 End 长度降序），服务统计类场景
   - `(*Matcher) FindNext(text string, offset int) (Match, bool)`：无状态按需查找，从 offset（字节偏移）开始查找第一个命中，找到即终止扫描；comma-ok 形式返回，无命中时返回零值 Match 与 false
 - 构建期：rune 级 Trie（支持中文多字节字符）+ 失败指针（BFS 构建），节点持稀疏转移表与失败指针（查询期段内查找 + 沿失败链回退，摊还 O(1)，表不膨胀）
 - BM 风格跳跃（坏字符规则）：自动机处于 root 态时，利用「词库首字符集 + 256 位字节过滤器」直接跳过不可能出现匹配起始的文本段
@@ -21,7 +22,7 @@
 ## Non-Goals
 - 大小写折叠、全半角归一化、正则、编辑距离匹配
 - 流式（分块）输入接口；关键词的动态增删（构建后不可变）
-- 重叠命中的全量返回模式（仅实现非重叠贪心）
+- 重叠模式的按需查找（`FindNextOverlapping`）：重叠语义与「从 offset 重扫的无状态迭代」天然不合——返回中国人[0,9) 后以 End 推进必然漏掉其内部更早起点的出现（如 国[3,6)），而带回退的游标 API 属另一量级改动，不做
 - 基于 rune 下标的位置/长度 API（决策依据与量化代价见「偏移计量单位」需求）
 
 ## ADDED Requirements
@@ -162,6 +163,26 @@
 #### Scenario: 链跨 root 前的不重叠接续
 - **WHEN** 词库 {"上海", "北京"}，文本 "上海北京"
 - **THEN** 输出 "上海"(0,6) 与 "北京"(6,12)（链内不重叠接续，扫完提交整链）
+
+### Requirement: FindAllOverlapping 重叠全量返回
+系统 SHALL 提供 `(*Matcher) FindAllOverlapping(text string) []Match`，返回 text 中全部关键词出现（含互相重叠者），服务词频统计、关键词提取、索引构建等统计类场景：
+- 语义：每个（关键词，出现位置）对输出一次；同一关键词同一位置至多一次；**不做**非重叠筛选——互为包含/重叠的出现全部保留（`outLens` 本就携带以每个结束位置结尾的全部关键词，fail 链输出继承即全量信息）
+- 输出顺序：按 **End 升序**、同一 End 按**关键词长度降序**（单遍扫描的天然产出序；注意与 `FindAll` 的 Start 升序不同序）
+- 复用与开销：与 `FindAll` 共用自动机与 BM 跳跃（跳跃安全性只依赖词首字符判据，与输出模式无关）；时间 O(n + K)、空间 O(K)，K = 总出现数（**输出敏感**，病态后缀链词库下 K = O(n·m)，调用方自行评估输出规模）；查询期除结果切片外零分配
+- 与默认方法的关系：`FindAll` 语义（非重叠最左最长）不变；重叠模式**不提供 FindNext 对应版**（理由见 Non-Goals）
+- 无命中或 text 为空返回 nil
+
+#### Scenario: 包含关系全量保留
+- **WHEN** 词库 {"国", "人", "中国人"}，文本 "中国人"
+- **THEN** 输出 3 条：国(3,6)、中国人(0,9)、人(6,9)——End 升序（6 < 9），同 End=9 长度降序（9 字节者先于 3 字节者）
+
+#### Scenario: 重叠邻居均保留
+- **WHEN** 词库 {"上海", "海口"}，文本 "上海口"
+- **THEN** 输出 上海(0,6) 与 海口(3,9)（`FindAll` 只返回 上海；全量模式两者都在）
+
+#### Scenario: 词频统计
+- **WHEN** 对任意文本以 `len(FindAllOverlapping(text))` 或逐条计数统计各关键词出现次数
+- **THEN** 与 `strings.Count` 逐词统计结果一致
 
 ### Requirement: FindNext 按需查找（超长文本友好）
 系统 SHALL 提供 `(*Matcher) FindNext(text string, offset int) Match`：
