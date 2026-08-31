@@ -9,7 +9,6 @@ type node struct {
 	base    int32   // 自有边区间在 Matcher.transKeys/transVals 中的起始下标
 	count   int32   // 自有边条数
 	fail    int32   // 失败指针：已匹配部分的最长真后缀（且是词库中某关键词前缀）对应的节点；无则指向 root
-	termLen int32   // 恰好在当前状态结束的关键词字节长度，0 表示无（终止标记，保证完整匹配）
 	outLens []int32 // 以当前状态结束的全部关键词字节长度，严格降序（自身 + 失败链继承）；nil 表示无
 }
 
@@ -127,7 +126,6 @@ func (b *builder) flatten() ([]node, []rune, []int32) {
 		bn := &b.nodes[i]
 		nd := &nodes[i]
 		nd.fail = bn.fail
-		nd.termLen = bn.termLen
 		nd.outLens = bn.outLens
 		if len(bn.children) == 0 {
 			continue // 叶子：count=0，查询期直接沿 fail 回退
