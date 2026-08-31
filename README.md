@@ -1,4 +1,4 @@
-# ratchetsearch
+# ratchetmatch
 
 **English** | [简体中文](README_CN.md)
 
@@ -22,10 +22,10 @@ An ACBM (Aho-Corasick + Boyer-Moore) multi-pattern matching library optimized fo
 
 ## Quick Start
 
-Requires Go 1.27+; module name `ratchetsearch` (replace with the actual repository path when publishing to a hosting platform).
+Requires Go 1.27+; module path `github.com/JayceChant/ratchetmatch`.
 
 ```go
-matcher, err := ratchetsearch.New([]string{"上海", "北京", "人工智能", "机器学习"})
+matcher, err := ratchetmatch.New([]string{"上海", "北京", "人工智能", "机器学习"})
 if err != nil {
 	panic(err)
 }

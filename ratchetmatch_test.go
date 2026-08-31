@@ -1,4 +1,4 @@
-package ratchetsearch
+package ratchetmatch
 
 import (
 	"math/rand"

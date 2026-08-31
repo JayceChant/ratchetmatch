@@ -1,7 +1,7 @@
-// 本文件为 ratchetsearch 的内部测试包（package ratchetsearch），
+// 本文件为 ratchetmatch 的内部测试包（package ratchetmatch），
 // 以便访问自动机私有字段 m.nodes 复用同一份构建结果，只对比「扫描期有无跳跃」。
-// example_test.go 为外部测试包（package ratchetsearch_test），两者并存是 Go 允许的。
-package ratchetsearch
+// example_test.go 为外部测试包（package ratchetmatch_test），两者并存是 Go 允许的。
+package ratchetmatch
 
 import (
 	"strings"

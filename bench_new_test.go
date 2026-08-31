@@ -1,5 +1,5 @@
 // 本文件为构建期基准：量化 New 的耗时与内存分配，供转移表结构优化对比。
-package ratchetsearch
+package ratchetmatch
 
 import "testing"
 

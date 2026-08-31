@@ -1,4 +1,4 @@
-# ratchetsearch
+# ratchetmatch
 
 [English](README.md) | **简体中文**
 
@@ -22,10 +22,10 @@
 
 ## 快速上手
 
-要求 Go 1.27+，module 名 `ratchetsearch`（发布到托管平台时替换为实际仓库路径）。
+要求 Go 1.27+，module 路径为 `github.com/JayceChant/ratchetmatch`。
 
 ```go
-matcher, err := ratchetsearch.New([]string{"上海", "北京", "人工智能", "机器学习"})
+matcher, err := ratchetmatch.New([]string{"上海", "北京", "人工智能", "机器学习"})
 if err != nil {
 	panic(err)
 }

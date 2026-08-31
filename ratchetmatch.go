@@ -1,5 +1,5 @@
-// Package ratchetsearch 实现针对中文优化的 ACBM（Aho-Corasick + Boyer-Moore）
-// 多模式匹配。
+// Package ratchetmatch 实现针对中文优化的 ACBM（Aho-Corasick + Boyer-Moore）
+// 多模式匹配。名字中的 ratchet（棘轮）指文本指针单向只进不退的单遍扫描。
 //
 // 构建期建立 rune 级 Trie 与失败指针，节点转移表仅存自有 trie 边并展平进
 // 全局 CSR 有序数组：查询期每处理一个 rune 先在当前状态段内查找，未命中
@@ -8,10 +8,10 @@
 // root 态时应用 Boyer-Moore 坏字符跳跃，按词库首字符集跳过不可能出现匹配
 // 起始的文本段。
 //
-// 匹配语义为非重叠贪心：先命中优先；同一起始位置存在前缀关系的关键词取最长。
-// Matcher 构建完成后为只读数据结构（除 root 首字符表外无 map，查询期零分配），
-// 可无锁并发使用。
-package ratchetsearch
+// 匹配语义为非重叠最左最长：起点最小者优先，同一起点取完整出现的最长关键
+// 词（真包含关系一律输出最长）。Matcher 构建完成后为只读数据结构（除 root
+// 首字符表外无 map，查询期零分配），可无锁并发使用。
+package ratchetmatch
 
 import (
 	"errors"
@@ -49,17 +49,17 @@ type Matcher struct {
 // 扫描时按 RuneError 逐字节处理，不 panic、不漏扫。
 func New(keywords []string) (*Matcher, error) {
 	if len(keywords) == 0 {
-		return nil, errors.New("ratchetsearch: keyword list is empty")
+		return nil, errors.New("ratchetmatch: keyword list is empty")
 	}
 	for i, kw := range keywords {
 		if kw == "" {
-			return nil, fmt.Errorf("ratchetsearch: keyword at index %d is empty", i)
+			return nil, fmt.Errorf("ratchetmatch: keyword at index %d is empty", i)
 		}
 		if !utf8.ValidString(kw) {
-			return nil, fmt.Errorf("ratchetsearch: keyword at index %d is not valid UTF-8", i)
+			return nil, fmt.Errorf("ratchetmatch: keyword at index %d is not valid UTF-8", i)
 		}
 		if strings.Contains(kw, "\uFFFD") {
-			return nil, fmt.Errorf("ratchetsearch: keyword at index %d contains U+FFFD (replacement character)", i)
+			return nil, fmt.Errorf("ratchetmatch: keyword at index %d contains U+FFFD (replacement character)", i)
 		}
 	}
 	seen := make(map[string]struct{}, len(keywords)) // 构建期临时去重表

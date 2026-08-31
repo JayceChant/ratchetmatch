@@ -1,4 +1,4 @@
-# AGENTS.md — ratchetsearch 项目协作规范
+# AGENTS.md — ratchetmatch 项目协作规范
 
 本文件约束在本仓库中工作的所有 AI 助手 / 自动化任务的每一次循环。开始任何任务前必须完整阅读本文件。
 
@@ -71,7 +71,7 @@
 ## 5. 仓库结构
 
 ```
-ratchetsearch.go   公共 API（New / Match / Matcher）
+ratchetmatch.go   公共 API（New / Match / Matcher）
 build.go           Trie 构建、失败指针、稀疏转移自动机、BM 跳跃表
 search.go          FindAll / FindAllOverlapping / FindNext / scan / skipForward
 *_test.go          单元测试、示例、基准、fuzz（testdata/fuzz/ 存回归样本）

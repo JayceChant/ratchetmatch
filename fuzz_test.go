@@ -1,10 +1,10 @@
-// 本文件为 ratchetsearch 的 Go 原生 fuzz 测试（package ratchetsearch）。
+// 本文件为 ratchetmatch 的 Go 原生 fuzz 测试（package ratchetmatch）。
 // 核心价值：任意字节文本（含非法 UTF-8）× 任意关键词组合下，
 // 1) 绝不 panic；2) 三种查询满足一组可判定的不变量与朴素 oracle。
 // 运行：go test -fuzz FuzzMatch -fuzztime 30s（短跑）；种子语料经 f.Add 随源码提交，
 // 引擎生成的新语料默认落在 GOCACHE/fuzz；发现的崩溃样本回归于
 // testdata/fuzz/FuzzMatch/（随仓库提交，普通 go test 自动重放）。
-package ratchetsearch
+package ratchetmatch
 
 import (
 	"slices"

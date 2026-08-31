@@ -2,7 +2,7 @@
 
 验收全项通过（2026-08-31 全量复测；以下为已验证结论摘要，契约细节见 spec.md）：
 
-- 构建：go.mod（module ratchetsearch，go 1.27）；空词库/空串/非法 UTF-8/U+FFFD 关键词报错可区分；重复去重
+- 构建：go.mod（module github.com/JayceChant/ratchetmatch，go 1.27）；空词库/空串/非法 UTF-8/U+FFFD 关键词报错可区分；重复去重
 - 语义：非重叠最左最长（含前缀取最长、断词 fail 结算、逐级弹出、无空档——必死候选不弹链 {0,000} 用例）；FindNext 以 End 迭代 == FindAll（500 组随机 + fuzz）
 - 正确性：白盒自动机语义重推导（fail/outLens/byteFilter 不变量）、CSR 布局与二分分支、黑盒极端场景（自重叠/Emoji/词即整文本等）；naiveSearch 为独立 oracle，500 组随机对照一致
 - 跳跃：root 态坏字符跳跃与禁用跳跃的参照结果完全一致；ASCII 段字节级跳过

@@ -1,12 +1,12 @@
-// 本文件为 ratchetsearch 的外部测试包（package ratchetsearch_test），
+// 本文件为 ratchetmatch 的外部测试包（package ratchetmatch_test），
 // 提供可被 go test 校验输出的可运行示例（Example）。
-package ratchetsearch_test
+package ratchetmatch_test
 
 import (
 	"fmt"
 	"strings"
 
-	"ratchetsearch"
+	"github.com/JayceChant/ratchetmatch"
 )
 
 // ExampleMatcher_FindAll 演示一次性找出中英混合文本中的全部关键词命中。
@@ -15,7 +15,7 @@ import (
 // 3 字节，ASCII 每字符占 1 字节；匹配是精确的字符串匹配，"Beijing" 并不会
 // 命中中文关键词 "北京"。
 func ExampleMatcher_FindAll() {
-	matcher, err := ratchetsearch.New([]string{"上海", "北京", "广州", "深圳", "人工智能", "机器学习"})
+	matcher, err := ratchetmatch.New([]string{"上海", "北京", "广州", "深圳", "人工智能", "机器学习"})
 	if err != nil {
 		panic(err)
 	}
@@ -36,7 +36,7 @@ func ExampleMatcher_FindAll() {
 // 即可迭代命中序列，其结果与 FindAll 完全一致。这里只取前 3 条就 break，
 // 其后的大段文本完全不会被扫描。
 func ExampleMatcher_FindNext() {
-	matcher, err := ratchetsearch.New([]string{"上海", "北京", "人工智能", "机器学习"})
+	matcher, err := ratchetmatch.New([]string{"上海", "北京", "人工智能", "机器学习"})
 	if err != nil {
 		panic(err)
 	}
@@ -51,7 +51,7 @@ func ExampleMatcher_FindNext() {
 		return
 	}
 	// 以 first.End 为新起点继续按需迭代，收集满 3 条即停止。
-	hits := []ratchetsearch.Match{first}
+	hits := []ratchetmatch.Match{first}
 	off := first.End
 	for len(hits) < 3 {
 		m, ok := matcher.FindNext(text, off)

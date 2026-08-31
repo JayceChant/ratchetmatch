@@ -1,4 +1,4 @@
-# ratchetsearch：中文优化 ACBM 多模式匹配库 Spec
+# ratchetmatch：中文优化 ACBM 多模式匹配库 Spec
 
 ## 概述
 

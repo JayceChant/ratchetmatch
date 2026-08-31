@@ -20,3 +20,4 @@
 - **New 词库校验加固**（fuzz 发现）：关键词非法 UTF-8 在 rune 层坍缩为同一 RuneError（身份歧义），规范 U+FFFD 的 3 字节编码与查询端逐字节 RuneError 前进不一致（长度歧义，极端情形切片 panic）。二者均拒绝入词；文本侧非法字节不受影响（仍逐字节处理）。
 - 2026-08-31 文档精简：README 收敛为用户视角（选型依据与权衡），spec/tasks/checklist 压缩历史、保留设计决策与修正记录。
 - 2026-08-31 README 双语化：英文版置 README.md，中文原版迁移至 README_CN.md，两文件开头互链；正文内容与迁移前一致，无行为变化。
+- 2026-08-31 更名 ratchetsearch → ratchetmatch：原名「search」与本库模式匹配语义不符且与 API 家族（Find*/Match）不一致，"ratchet search" 又是系统发生学既有术语、Go 生态另有知名同名工具，检索混淆重。新名保留棘轮隐喻（文本指针单向只进不退），以 match 修正语义。仓库无下游引用，零迁移成本。
