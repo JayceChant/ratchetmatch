@@ -16,6 +16,8 @@ package ratchetsearch
 import (
 	"errors"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 )
 
 // Match 表示一次关键词命中。Start/End 为 text 中的字节偏移，
@@ -40,8 +42,11 @@ type Matcher struct {
 // New 根据关键词列表构建 Matcher。
 //
 // 关键词列表不能为空；关键词本身不能为空字符串；重复关键词会被自动去重。
-// 非法 UTF-8 的关键词按 rune 迭代时会统一得到 utf8.RuneError，
-// 与查询端 utf8.DecodeRuneInString 的行为一致。
+// 关键词必须是合法 UTF-8 且不得包含 U+FFFD（替换字符）：非法字节在 rune 层
+// 坍缩为同一个 RuneError（身份歧义），U+FFFD 的 3 字节编码与查询端逐字节
+// 前进不一致（长度歧义），二者均会使命中区间或关键词身份失去健全语义，
+// 故显式拒绝（详见 spec 词库校验需求）。文本侧的非法字节不受影响，
+// 扫描时按 RuneError 逐字节处理，不 panic、不漏扫。
 func New(keywords []string) (*Matcher, error) {
 	if len(keywords) == 0 {
 		return nil, errors.New("ratchetsearch: keyword list is empty")
@@ -49,6 +54,12 @@ func New(keywords []string) (*Matcher, error) {
 	for i, kw := range keywords {
 		if kw == "" {
 			return nil, fmt.Errorf("ratchetsearch: keyword at index %d is empty", i)
+		}
+		if !utf8.ValidString(kw) {
+			return nil, fmt.Errorf("ratchetsearch: keyword at index %d is not valid UTF-8", i)
+		}
+		if strings.Contains(kw, "\uFFFD") {
+			return nil, fmt.Errorf("ratchetsearch: keyword at index %d contains U+FFFD (replacement character)", i)
 		}
 	}
 	seen := make(map[string]struct{}, len(keywords)) // 构建期临时去重表

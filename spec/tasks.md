@@ -52,6 +52,13 @@
   - [x] 10.3 测试：确定性用例（包含保留/重叠邻居/嵌套前缀同 End 降序/无命中 nil）+ 500 组随机对照逐词 strings.Index 枚举
   - [x] 10.4 文档：README API 表与语义说明；checklist 勾选
 
+- [x] Task 11: 测试强化与 Go 原生 fuzz（2026-08-31）
+  - [x] 11.1 白盒：TestAutomatonSemantics（DFS 还原路径，重推导 fail = 最长真后缀前缀节点、outLens = 关键词后缀长度降序、byteFilter 与词库首字节集逐位一致）；TestCSRLayout 增补 outLens 严格降序不变量；TestFindBinaryBranch（>16 孩子节点的 find 二分分支，此前从未被用例触发）
+  - [x] 11.2 黑盒：TestEdgeCases（自重叠 AA/ABA、词长于文本、单字节词全命中、Emoji 4 字节 rune、重复输入去重、词即整文本）；TestNewRejectsInvalidKeywords（非法 UTF-8 三型 + U+FFFD 两型 + 文本侧非法字节不漏扫对照）
+  - [x] 11.3 fuzz：fuzz_test.go FuzzMatch（任意字节文本 × 3 关键词）——New 契约 oracle（首个非法关键词定错误类别）、FindAll 不变量、FindAllOverlapping 逐词枚举 oracle + 输出序、FindNext End 迭代 == FindAll、任意逐字节 offset == 后缀 FindAll 首条平移；种子语料 f.Add 9 组；testdata/fuzz 回归样本随源码提交
+  - [x] 11.4 fuzz 成果转正为产品修复（详见实现期修正记录）：a) New 拒绝非法 UTF-8 / U+FFFD 关键词（rune 歧义）；b) scan 必死候选不弹链（空档缺陷，修复 FindNext 迭代一致性）
+  - [x] 11.5 验证：全量测试/lint/3 分钟 fuzz（449 万 execs 零失败）/基准无回退（Mixed 跳跃 1.97x、FindNext 与 NoSkip 对照保持）/Windows 侧 -race 通过
+
 # Task Dependencies
 - Task 2, 4 依赖 Task 1（先有 module 与 API 声明）
 - Task 3 依赖 Task 2（先有 Trie）
@@ -63,3 +70,5 @@
 # 实现期修正记录
 - 匹配语义由「先命中优先」改为非重叠最左最长（leftmost-longest）：原贪心在真包含词库下输出碎片（{国,人,中国人}+"中国人" → 国、人），不符合设计意图——长词进行中应优先延续，断词才 fail 结算短词。scan 由单值 pending 改为「待提交链」：更左候选弹出链尾、同起点取更长、不重叠入链、其余遮蔽；自动机回 root 或扫描结束时提交整链（root 时刻安全性证明见 spec）。naiveSearch 参照与全部用例同步改写，500 组随机对照在新语义下一致；基准同机交错对比无回退（Chinese/Mixed/FindNext 均持平）。
 - 修复 maxOut 遮蔽缺陷：原设计每个结束位置只暴露最长关键词（maxOut 单值），当其与 pending 重叠被跳过时，同位置本可兼容的更短候选（如词库 {国,人,中国人} 的文本 "中国人" 中 "国" 先命中后的 "人"）被一并遮蔽，导致 FindAll 与 FindNext 迭代不一致（随机测试 59/2000 组分歧）。改为节点存全部输出长度 outLens（降序），scan 从最长候选开始选第一个与 pending 兼容者。spec.md 的贪心规则描述已同步更新并补充对应场景。
+- 修复必死候选弹链导致的空档（2026-08-31 fuzz 发现，FuzzMatch/135f3b233751631c）：词库 {0,000} 文本 "000000000001" 中，候选 0(8,11) 比链尾 0(9,10) 更左而弹出之，但随即被更左的 000(6,9) 遮蔽——链规则允许「必死候选」改变链，为它让位的合法命中被无谓丢弃，[9,10) 成为空档，且无状态 FindNext（以 End 推进、从 offset 重扫）永远无法复现该空档，FindNext 迭代与 FindAll 出现第 5/4 条分歧。修正：被遮蔽的候选无权改变链，弹出可恢复（链前缀保留 + 比较基准）；scan 的 flush 移至 root 循环头（先提交再跳跃，消除「单 rune 词即完整命中」时链残留到下一次跳跃的时序漏洞）；FindNext 改为整链首条产出（首命中即 FindAll 首条）。naiveSearch 参照改写为教科书式重启贪心（每轮取起点最小/同起点最长、从 End 续扫），不再与被测链规则同构，独立性更强；500 组随机对照在新 oracle 下全部一致。
+- New 词库校验加固（2026-08-31 fuzz 发现，testdata/fuzz/FuzzMatch/7411a2db94074bb1）：关键词含非法 UTF-8 字节时在 rune 层坍缩为同一 RuneError（身份歧义："\xb8" 与 "\xff" 入词同路径），含规范 U+FFFD 时其 3 字节编码与查询端逐字节 RuneError 前进不一致（长度歧义：与非法字节关键词同坍缩节点时 termLen 相互覆写，极端情形 End 越界切片 panic）。二者均拒绝；文本侧非法字节不受影响（仍按 RuneError 逐字节处理）。spec「词库构建与校验」需求与场景同步补充。

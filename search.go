@@ -97,7 +97,7 @@ func (m *Matcher) FindAllOverlapping(text string) []Match {
 
 // FindNext 从 offset（字节偏移）开始查找第一个命中，找到即终止扫描、不遍历剩余文本，
 // 适合超长文本按需查找。无状态，可并发调用；调用方用返回的 End 作下次 offset 迭代，
-// 得到的序列与 FindAll 完全一致。无命中返回 (Match{}, false)。
+// 得到的序列与 FindAll 完全一致（首条命中即 FindAll 的第一条）。无命中返回 (Match{}, false)。
 // offset<0 按 0 处理；offset>=len(text) 返回 false；offset 落在多字节字符中间时向后对齐到 rune 边界。
 func (m *Matcher) FindNext(text string, offset int) (Match, bool) {
 	if offset < 0 {
@@ -113,13 +113,15 @@ func (m *Matcher) FindNext(text string, offset int) (Match, bool) {
 	if offset >= n {
 		return Match{}, false
 	}
-	var found Match
-	ok := false
+	var hits []Match // 与 FindAll 同源的待提交链，一次性整链产出
 	m.scan(text, offset, func(hit Match) bool {
-		found, ok = hit, true
-		return false // 找到第一个即停止扫描
+		hits = append(hits, hit)
+		return false // 停止扫描；整链已在本次 emit 中给出
 	})
-	return found, ok
+	if len(hits) == 0 {
+		return Match{}, false
+	}
+	return hits[0], true
 }
 
 // pendHit 是待提交链上的一个已确定区间、尚未落袋的候选命中。
@@ -131,11 +133,15 @@ type pendHit struct {
 // emit 返回 false 时立即停止。文本指针单调前进、绝不回退。
 //
 // 最左最长（leftmost-longest）语义经「待提交链」实现：候选按结束位置升序到达
-// （同一结束位置的候选按长度降序，来自 outLens），链内起点升序、互不重叠：
-//   - 候选起点 < 链尾起点：候选更左，弹出链尾（被覆盖）后继续比较
-//   - 候选起点 == 链尾起点：取更长（真包含关系一律输出最长）
-//   - 候选起点 >= 链尾结束（不重叠）：入链接续
-//   - 其余（与链尾重叠且起点更晚）：被链尾遮蔽，丢弃
+// （同一结束位置的候选按长度降序，来自 outLens），链内起点升序、互不重叠。
+// 候选 cs 与链比较（k 为弹出后基准，chain[:k] 为保留前缀）：
+//   - cs < 链尾起点：候选更左，弹出链尾后继续向链左比较
+//   - cs == 基准起点：取更长（真包含关系一律输出最长），取代被弹出者
+//   - cs >= 基准结束（不重叠）：入链接续，取代被弹出者
+//   - 其余（与基准重叠且起点更晚）：候选必被遮蔽——必死候选无权改变链，
+//     被弹出者原样恢复。若允许其弹链，会出现「为必死候选让位而丢弃本可
+//     提交的命中」的空档（如 {0,000}+"000000000001" 在 [9,10) 的空档），
+//     破坏最左最长语义，且无状态 FindNext 永远无法复现该空档。
 //
 // 提交时机：自动机回到 root 或扫描结束时提交整链。root 时刻的安全性：
 // 若存在「起点 ≤ 当前 pos 而结束于其后」的候选，其前缀仍是词库前缀，
@@ -163,7 +169,10 @@ func (m *Matcher) scan(text string, from int, emit func(Match) bool) {
 		return true
 	}
 	for pos < n {
-		if state == 0 {
+		if state == 0 { // root 循环：先提交链（安全提交点，见上）再跳跃
+			if !flush() {
+				return
+			}
 			pos = m.skipForward(text, pos)
 			if pos >= n {
 				break
@@ -175,26 +184,25 @@ func (m *Matcher) scan(text string, from int, emit func(Match) bool) {
 		// 以 pos 结束的候选按长度降序（outLens 降序保证更左者先处理）
 		for _, l := range m.nodes[state].outLens {
 			cs, ce := int32(pos)-l, int32(pos)
-			for len(chain) > 0 && cs < chain[len(chain)-1].start {
-				chain = chain[:len(chain)-1] // 链尾被更左候选覆盖，弹出
+			k := len(chain)
+			for k > 0 && cs < chain[k-1].start {
+				k-- // 候选更左：弹出链尾，继续向链左比较
 			}
-			if len(chain) == 0 {
-				chain = append(chain, pendHit{cs, ce})
+			if k == 0 {
+				chain = append(chain[:k], pendHit{cs, ce}) // 候选最左，取代全部弹出者
 				continue
 			}
-			tail := &chain[len(chain)-1]
+			t := &chain[k-1]
 			switch {
-			case cs == tail.start:
-				if ce > tail.end { // 同起点取更长（真包含取最长）
-					tail.end = ce
+			case cs >= t.end: // 不重叠：入链，取代被弹出者
+				chain = append(chain[:k], pendHit{cs, ce})
+			case cs == t.start:
+				if ce > t.end { // 同起点取更长（真包含取最长）
+					t.end = ce
 				}
-			case cs >= tail.end: // 不重叠：入链接续
-				chain = append(chain, pendHit{cs, ce})
-			default: // 与链尾重叠且起点更晚：被遮蔽
+				chain = chain[:k] // 取代被弹出者
+			default: // 与基准重叠且起点更晚：必死候选，链原样保留（弹出者恢复）
 			}
-		}
-		if state == 0 && !flush() { // 安全提交点（见函数注释证明）
-			return
 		}
 	}
 	flush()

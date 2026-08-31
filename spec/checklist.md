@@ -30,3 +30,11 @@
 - [x] Matcher 构建后只读，可无锁并发使用 FindAll 与 FindNext；go test -race 通过（8 goroutine × 100 次）
 - [x] example_test.go 提供可运行示例（含 FindNext 按需迭代）；bench_test.go 提供两种场景基准并对照禁用跳跃的参照实现
 - [x] gofmt、go vet 通过；go test ./... 与 go test -race ./... 全部通过
+- [x] New 拒绝非法 UTF-8 与含 U+FFFD 的关键词，错误信息可区分原因；文本侧非法字节仍按 RuneError 逐字节处理不漏扫（TestNewRejectsInvalidKeywords + fuzz 契约 oracle）
+- [x] 白盒自动机语义重推导通过：fail = 路径最长真后缀（且是词库前缀）节点、outLens = 路径关键词后缀长度降序、byteFilter 与词库首字节集逐位一致（TestAutomatonSemantics）
+- [x] CSR 段内键严格升序、转移目标合法、outLens 严格降序不变量通过（TestCSRLayout）；find 二分分支（>16 孩子）转移正确（TestFindBinaryBranch）
+- [x] 黑盒极端场景正确：自重叠（AA/ABA）、词长于文本、单字节词逐字符全命中、Emoji 4 字节 rune、重复输入去重、词即整文本（TestEdgeCases）
+- [x] FuzzMatch 通过：任意字节文本 × 关键词组合下不 panic；FindAll/FindAllOverlapping/FindNext 满足全部不变量与朴素 oracle；3 分钟 449 万 execs 零失败；崩溃样本回归于 testdata/fuzz/ 随普通 go test 重放
+- [x] 无空档不变量：被遮蔽候选不得弹出链元素（{0,000}+"000000000001" → 000×3 + 0×2，无 [9,10) 空档）；FindNext 以 End 迭代与 FindAll 完全一致（含周期性词库场景，TestFindNextEdgeConsistency + fuzz）
+- [x] naiveSearch 为教科书式重启贪心 oracle（每轮起点最小/同起点最长），500 组随机对照与 FindAll 完全一致
+- [x] fuzz 后基准无回退：混合文本跳跃收益 ~1.97x 保持、FindNext ~10x 于全量扫描保持、New 三档与基线持平
