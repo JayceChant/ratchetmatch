@@ -63,6 +63,7 @@
   - 仅遍历切片/映射无需下标时用 `for _, v := range xs`，需要下标时 `for i, v := range xs`，不再用 C 式三段循环；
   - 基准循环用 `for b.Loop() { ... }`，不再写 `for i := 0; i < b.N; i++`（Go 1.24+）：自动扣除每次迭代的管理开销、保持编译器优化（防止过度内联失真）、无需手动 `b.ResetTimer`（准备代码天然排除）；
   - `min` / `max` / `clear` 内建（Go 1.21+）优先于手写；`slices` / `maps` 标准库包优先于手写循环（排序、查找、去重等）；
+  - `strings.Builder` 链式写入时拆分拼接表达式：不写 `b.WriteString(prefix + string(s) + ",")`，改为 `b.WriteString(prefix); b.WriteRune(s); b.WriteByte(',')`（逐次写入零中间分配，`string(rune)` 转换会被拼接整体物化；go fix stringsbuilder 也会做此改写）；
   - 上述已由 golangci-lint（gofmt/standard 集）部分覆盖，但 lint 不报 range-over-int 与 b.N→b.Loop 升级，靠本条约定自律；提交前可跑 `go fix ./...` 自查（应无输出，注意 go fix 不含 b.Loop 升级）。
 - **公共 API 契约**：`New` / `FindAll` / `FindAllOverlapping` / `FindNext` 的签名与语义以 `spec/spec.md` 为准，不得随意变更；变更属破坏性修改（**BREAKING**），需在 spec 中显式声明并说明迁移方式。
 - **并发安全**：`Matcher` 构建后必须保持只读（无查询期可变状态），`FindAll` / `FindNext` 必须可无锁并发调用；新增字段/逻辑时不得违反此约束。

@@ -322,7 +322,9 @@ func TestFindBinaryBranch(t *testing.T) {
 	// 混排文本一次扫描全部命中（逐词转移均过二分分支）
 	var b strings.Builder
 	for _, s := range suffixes {
-		b.WriteString(prefix + string(s) + ",")
+		b.WriteString(prefix)
+		b.WriteRune(s)
+		b.WriteByte(',')
 	}
 	if got := m.FindAll(b.String()); len(got) != len(suffixes) {
 		t.Errorf("混排扫描命中 %d 条, 期望 %d 条", len(got), len(suffixes))
