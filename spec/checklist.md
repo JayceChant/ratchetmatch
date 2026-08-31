@@ -1,40 +1,12 @@
 # Checklist
 
-- [x] go.mod 存在，声明 module ratchetsearch 与 go 1.27
-- [x] New 接受关键词列表构建 Matcher；空词库（nil/长度 0）与含空字符串的词库返回可区分的错误
-- [x] 重复关键词被去重
-- [x] Trie 按 rune 构建，中文按整字符（Unicode 码点）转移，绝不按 UTF-8 字节碎片转移
-- [x] 关键词末节点带终止标记（termLen），实现完整匹配语义（部分前缀不算命中）
-- [x] 失败指针经 BFS 计算，指向「已匹配部分的最长真后缀（且是词库中某关键词前缀）」的节点，无则指向 root
-- [x] 失败指针在构建期解析为全量转移（DFA goto 表，叶子共享 fail 表）：查询期任意状态 × 任意 rune 的转移为 O(1)，无运行时回退链
-- [x] FindAll 对文本按 rune 单遍扫描：T 指针单调向前绝不回退，仅自动机状态在移动
-- [x] 到达终止状态时，经输出链（outLens，含失败链继承）取得以当前文本位置结尾的候选
-- [x] 非法 UTF-8 字节按 utf8.RuneError 处理并前进，不 panic、不漏扫后续内容
-- [x] root 态 BM 坏字符跳跃实现：词库 rune 集 + 256 位字节过滤器，字节级批量跳过后 rune 解码精确判断
-- [x] 跳跃逻辑保证不漏报：500 组随机对照测试与禁用跳跃的朴素参照实现结果完全一致
-- [x] 词库仅含中文时，ASCII/标点长区段被字节级快速跳过且结果正确（TestASCIISkipCorrectness）
-- [x] 非重叠最左最长语义正确：前缀关系取最长（{"中国","中国人"} + "我是中国人" → 仅 "中国人"）
-- [x] 前缀未在文本中完整出现时输出较短关键词（{"中","中毒"} + "中x" → "中"）
-- [x] 重叠时起点更左者胜（{"上海","海口"} + "上海口" → 仅 "上海"）
-- [x] 同结尾取更长（{"他","其他"} + "其他" → 仅 "其他"）
-- [x] 不重叠命中按 Start 升序全部输出；命中之间互不重叠，每个文本位置至多属于一个命中
-- [x] 待提交链在单遍扫描中实现最左最长语义，T 指针不回退：更左候选弹出链尾、同起点取更长、不重叠入链、其余遮蔽；自动机回 root 或扫描结束提交整链（真包含取最长：{国,人,中国人}+"中国人" → 中国人；断词 fail 结算：+"中国梦" → 国；逐级弹出：{a,ba,cba}+"cba" → cba）
-- [x] Match 的 Start/End 为字节偏移、半开区间，text[Start:End] == Keyword 成立（assertMatches 逐条自检 + rune 边界检查）
-- [x] 无命中或 text 为空时 FindAll 返回 nil（长度为 0）
-- [x] FindNext(text, offset) 从 offset 开始返回首个最左最长命中，找到即终止不遍历剩余文本
-- [x] FindAllOverlapping 重叠全量返回：包含/重叠出现全保留（{国,人,中国人}+"中国人" → 国、中国人、人），输出 End 升序、同 End 长度降序；500 组随机对照与逐词 strings.Index 枚举一致；无命中/空文本返回 nil
-- [x] FindNext 无状态：Matcher 无查询期可变状态，可并发调用
-- [x] FindNext 边界正确：offset < 0 按 0；offset >= len(text) 返回 (Match{}, false)；offset 在 UTF-8 字符中间时向后对齐 rune 边界再扫描
-- [x] FindNext 迭代（以 End 推进）得到的命中序列与 FindAll 完全一致（500 组随机测试覆盖）
-- [x] FindNext 无命中返回 (Match{}, false)，命中返回 (Match, true)；采用 comma-ok 而非 *Match nil 或裸零值（选型理由记录在 spec）
-- [x] Matcher 构建后只读，可无锁并发使用 FindAll 与 FindNext；go test -race 通过（8 goroutine × 100 次）
-- [x] example_test.go 提供可运行示例（含 FindNext 按需迭代）；bench_test.go 提供两种场景基准并对照禁用跳跃的参照实现
-- [x] gofmt、go vet 通过；go test ./... 与 go test -race ./... 全部通过
-- [x] New 拒绝非法 UTF-8 与含 U+FFFD 的关键词，错误信息可区分原因；文本侧非法字节仍按 RuneError 逐字节处理不漏扫（TestNewRejectsInvalidKeywords + fuzz 契约 oracle）
-- [x] 白盒自动机语义重推导通过：fail = 路径最长真后缀（且是词库前缀）节点、outLens = 路径关键词后缀长度降序、byteFilter 与词库首字节集逐位一致（TestAutomatonSemantics）
-- [x] CSR 段内键严格升序、转移目标合法、outLens 严格降序不变量通过（TestCSRLayout）；find 二分分支（>16 孩子）转移正确（TestFindBinaryBranch）
-- [x] 黑盒极端场景正确：自重叠（AA/ABA）、词长于文本、单字节词逐字符全命中、Emoji 4 字节 rune、重复输入去重、词即整文本（TestEdgeCases）
-- [x] FuzzMatch 通过：任意字节文本 × 关键词组合下不 panic；FindAll/FindAllOverlapping/FindNext 满足全部不变量与朴素 oracle；3 分钟 449 万 execs 零失败；崩溃样本回归于 testdata/fuzz/ 随普通 go test 重放
-- [x] 无空档不变量：被遮蔽候选不得弹出链元素（{0,000}+"000000000001" → 000×3 + 0×2，无 [9,10) 空档）；FindNext 以 End 迭代与 FindAll 完全一致（含周期性词库场景，TestFindNextEdgeConsistency + fuzz）
-- [x] naiveSearch 为教科书式重启贪心 oracle（每轮起点最小/同起点最长），500 组随机对照与 FindAll 完全一致
-- [x] fuzz 后基准无回退：混合文本跳跃收益 ~1.97x 保持、FindNext ~10x 于全量扫描保持、New 三档与基线持平
+验收全项通过（2026-08-31 全量复测；以下为已验证结论摘要，契约细节见 spec.md）：
+
+- 构建：go.mod（module ratchetsearch，go 1.27）；空词库/空串/非法 UTF-8/U+FFFD 关键词报错可区分；重复去重
+- 语义：非重叠最左最长（含前缀取最长、断词 fail 结算、逐级弹出、无空档——必死候选不弹链 {0,000} 用例）；FindNext 以 End 迭代 == FindAll（500 组随机 + fuzz）
+- 正确性：白盒自动机语义重推导（fail/outLens/byteFilter 不变量）、CSR 布局与二分分支、黑盒极端场景（自重叠/Emoji/词即整文本等）；naiveSearch 为独立 oracle，500 组随机对照一致
+- 跳跃：root 态坏字符跳跃与禁用跳跃的参照结果完全一致；ASCII 段字节级跳过
+- FindAllOverlapping：全量保留、End 升序同 End 长度降序，与逐词 strings.Index 枚举一致
+- 并发：Matcher 构建后只读，8 goroutine × 100 次 FindAll/FindNext，`go test -race` 通过
+- fuzz：FuzzMatch 任意字节文本 × 关键词组合不 panic、全部不变量与 oracle 成立（3 分钟 449 万 execs 零失败）；崩溃样本回归 testdata/fuzz/
+- 工程：gofmt / go vet / golangci-lint（0 issues）/ go test ./... 全链路通过；基准无回退（混合跳跃 ~1.97x、FindNext ~10x、New 持平或更优）
