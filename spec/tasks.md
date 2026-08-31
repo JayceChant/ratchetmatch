@@ -46,6 +46,12 @@
   - [x] 9.5 验证：全量测试（含随机对照/race）通过；New100 快 2.9x、B/op 省 2.7x、allocs 减半；New10k 快 1.3x、allocs 减半；扫描基准同机交错对比持平或略优（Chinese/Mixed -5% 左右，FindNext 持平）
   - [x] 9.6 白盒测试更新：CSR 区间/升序/目标合法性不变量 + root 首字符表与词库首字符集一致性断言
 
+- [x] Task 10: FindAllOverlapping 重叠全量返回（独立方法，默认路径不变）
+  - [x] 10.1 spec 修订：移出 Non-Goals（改为不做重叠版 FindNext，含理由）；新增 Requirement（语义/End 升序输出序/O(n+K) 开销/与默认方法关系）
+  - [x] 10.2 search.go 新增 FindAllOverlapping：独立循环（默认方法路径零改动），直接逐条输出 outLens（fail 链输出继承即全量信息），跳跃复用
+  - [x] 10.3 测试：确定性用例（包含保留/重叠邻居/嵌套前缀同 End 降序/无命中 nil）+ 500 组随机对照逐词 strings.Index 枚举
+  - [x] 10.4 文档：README API 表与语义说明；checklist 勾选
+
 # Task Dependencies
 - Task 2, 4 依赖 Task 1（先有 module 与 API 声明）
 - Task 3 依赖 Task 2（先有 Trie）

@@ -57,6 +57,44 @@ func (m *Matcher) FindAll(text string) []Match {
 	return out
 }
 
+// FindAllOverlapping 返回 text 中全部关键词出现（含互相重叠者），服务词频
+// 统计、关键词提取、索引构建等场景：每个（关键词，出现位置）输出一次，
+// 不做非重叠筛选。输出按 End 升序、同一 End 按关键词长度降序（单遍扫描的
+// 天然产出序，与 FindAll 的 Start 升序不同序）。无命中或 text 为空返回 nil。
+//
+// 开销输出敏感：时间 O(n + K)、空间 O(K)，K 为总出现数——病态词库
+// （大量互为后缀的词）配高频文本时 K 可达 O(n·m)，调用方自行评估规模。
+// 不提供对应的 FindNext 版本：重叠语义与「从 offset 重扫的无状态迭代」
+// 不合，返回一条命中后无法不重扫地枚举与其重叠的更早出现（见 spec Non-Goals）。
+func (m *Matcher) FindAllOverlapping(text string) []Match {
+	var out []Match
+	n := len(text)
+	pos := 0
+	var state int32
+	for pos < n {
+		if state == 0 {
+			pos = m.skipForward(text, pos) // 跳跃安全性只依赖词首字符判据，与输出模式无关
+			if pos >= n {
+				break
+			}
+		}
+		r, size := utf8.DecodeRuneInString(text[pos:])
+		state = m.step(state, r)
+		pos += size
+		// 以 pos 结束的全部关键词（outLens 降序 = 同 End 长度降序）逐条输出；
+		// fail 链的输出继承恰好就是重叠全量信息，无需任何筛选
+		for _, l := range m.nodes[state].outLens {
+			start := pos - int(l)
+			out = append(out, Match{
+				Start:   start,
+				End:     pos,
+				Keyword: text[start:pos],
+			})
+		}
+	}
+	return out
+}
+
 // FindNext 从 offset（字节偏移）开始查找第一个命中，找到即终止扫描、不遍历剩余文本，
 // 适合超长文本按需查找。无状态，可并发调用；调用方用返回的 End 作下次 offset 迭代，
 // 得到的序列与 FindAll 完全一致。无命中返回 (Match{}, false)。

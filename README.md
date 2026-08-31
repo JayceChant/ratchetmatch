@@ -104,6 +104,7 @@ for _, m := range hits {
 |---|---|
 | `New(keywords []string) (*Matcher, error)` | 构建不可变 `Matcher`。词库为空或含空字符串返回可区分的错误；重复关键词自动去重 |
 | `(*Matcher) FindAll(text string) []Match` | 返回全部命中，按 `Start` 升序；无命中或 text 为空返回 `nil` |
+| `(*Matcher) FindAllOverlapping(text string) []Match` | 重叠全量返回：全部出现（含互相重叠者），按 `End` 升序、同 `End` 长度降序；适合词频统计、索引构建。开销输出敏感 O(n+K)，K 为出现总数 |
 | `(*Matcher) FindNext(text string, offset int) (Match, bool)` | 无状态按需查找：从 `offset`（字节偏移）返回首个命中，找到即终止。`offset < 0` 按 0 处理；`offset >= len(text)` 或无命中返回 `(Match{}, false)`；`offset` 落在多字节字符中间时向后对齐 rune 边界 |
 | `Match{Start, End int; Keyword string}` | 一次命中；`text[Start:End] == Keyword` 恒成立 |
 
@@ -120,6 +121,8 @@ for _, m := range hits {
 | 断词后按 fail 结算短词 | `{"国", "人", "中国人"}` / `"中国梦"` | 仅 `国` |
 
 规则要点：从左到右，起点最小者优先；同一起点取完整出现的最长关键词（长词进行中优先延续，断词才结算短词）。命中之间互不重叠，每个文本位置至多属于一个命中；同一关键词同一位置至多输出一次。
+
+需要**全部出现**（含互相重叠，用于词频统计/索引构建）时用 `FindAllOverlapping`：如词库 `{"国", "人", "中国人"}` 在 `"中国人"` 上返回 3 条（`国`、`中国人`、`人`），其输出按 `End` 升序而非 `Start` 升序。该模式无 `FindNext` 对应版本（重叠语义与无状态按需迭代不兼容）。
 
 ## 性能
 

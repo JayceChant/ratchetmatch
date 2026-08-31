@@ -22,6 +22,7 @@
 - [x] Match 的 Start/End 为字节偏移、半开区间，text[Start:End] == Keyword 成立（assertMatches 逐条自检 + rune 边界检查）
 - [x] 无命中或 text 为空时 FindAll 返回 nil（长度为 0）
 - [x] FindNext(text, offset) 从 offset 开始返回首个最左最长命中，找到即终止不遍历剩余文本
+- [x] FindAllOverlapping 重叠全量返回：包含/重叠出现全保留（{国,人,中国人}+"中国人" → 国、中国人、人），输出 End 升序、同 End 长度降序；500 组随机对照与逐词 strings.Index 枚举一致；无命中/空文本返回 nil
 - [x] FindNext 无状态：Matcher 无查询期可变状态，可并发调用
 - [x] FindNext 边界正确：offset < 0 按 0；offset >= len(text) 返回 (Match{}, false)；offset 在 UTF-8 字符中间时向后对齐 rune 边界再扫描
 - [x] FindNext 迭代（以 End 推进）得到的命中序列与 FindAll 完全一致（500 组随机测试覆盖）

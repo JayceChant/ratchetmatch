@@ -263,6 +263,85 @@ func TestGreedySemantics(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// 3b. 重叠全量返回（FindAllOverlapping）
+// ---------------------------------------------------------------------------
+
+// TestFindAllOverlapping 验证重叠全量语义与输出顺序（End 升序、同 End 长度降序）。
+func TestFindAllOverlapping(t *testing.T) {
+	tests := []struct {
+		name     string
+		keywords []string
+		text     string
+		want     []Match
+	}{
+		// 以 pos=6 结束：国(3,6)；以 pos=9 结束：中国人(0,9) 长 9 先于 人(6,9) 长 3
+		{"包含关系全量保留", []string{"国", "人", "中国人"}, "中国人",
+			[]Match{{3, 6, "国"}, {0, 9, "中国人"}, {6, 9, "人"}}},
+		// 上海(0,6)、海口(3,9) 重叠邻居均保留（FindAll 仅返回 上海）
+		{"重叠邻居均保留", []string{"上海", "海口"}, "上海口",
+			[]Match{{0, 6, "上海"}, {3, 9, "海口"}}},
+		{"无命中返回 nil", []string{"中国"}, "abc", nil},
+		{"空文本返回 nil", []string{"中国"}, "", nil},
+		// x=[0,1)：嵌套前缀 a(0,1)、ab(0,2)、abc(0,3) 同 End=3 依长度降序
+		{"嵌套前缀同End降序", []string{"a", "ab", "abc"}, "xabc",
+			[]Match{{1, 2, "a"}, {1, 3, "ab"}, {1, 4, "abc"}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := mustNew(t, tc.keywords)
+			got := m.FindAllOverlapping(tc.text)
+			assertMatches(t, tc.text, tc.name, got, tc.want)
+		})
+	}
+}
+
+// TestFindAllOverlappingRandom 随机对照：全量出现集合与逐词 strings.Count 枚举一致，
+// 输出顺序满足 End 升序、同 End 长度降序。
+func TestFindAllOverlappingRandom(t *testing.T) {
+	rng := rand.New(rand.NewSource(20260830))
+	pool := []string{"中", "中国", "中国人", "国", "人", "上海", "海口", "北京", "a", "ab", "口", "大", "海", "上"}
+	for i := 0; i < 500; i++ {
+		kws := drawKeywords(rng, pool, 2, 8)
+		text := randomText(rng, kws, 20, 80)
+		m := mustNew(t, kws)
+		got := m.FindAllOverlapping(text)
+		// 期望集：逐词枚举全部出现（strings.Count 风格），按 End 升序、长度降序排序
+		type occ struct{ start, end int }
+		var want []occ
+		for _, kw := range kws {
+			for j := 0; ; {
+				k := strings.Index(text[j:], kw)
+				if k < 0 {
+					break
+				}
+				s := j + k
+				want = append(want, occ{s, s + len(kw)})
+				j = s + 1
+			}
+		}
+		sort.Slice(want, func(a, b int) bool {
+			if want[a].end != want[b].end {
+				return want[a].end < want[b].end
+			}
+			return want[a].end-want[a].start > want[b].end-want[b].start
+		})
+		if len(got) != len(want) {
+			t.Fatalf("第 %d 组出现数不符\n词库: %q\n文本: %q\ngot (%d): %v\nwant (%d): %v",
+				i, kws, text, len(got), got, len(want), want)
+		}
+		for j := range want {
+			if got[j].Start != want[j].start || got[j].End != want[j].end {
+				t.Fatalf("第 %d 组第 %d 条不符\ngot: %+v want: %+v\n文本: %q",
+					i, j, got[j], want[j], text)
+			}
+			if text[got[j].Start:got[j].End] != got[j].Keyword {
+				t.Fatalf("第 %d 组第 %d 条切片与关键词不一致", i, j)
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // 4. 空文本与无命中
 // ---------------------------------------------------------------------------
 
