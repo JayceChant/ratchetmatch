@@ -56,7 +56,10 @@ func buildChineseText(n int) string {
 	runes := 0
 	i := 0
 	for runes < n {
-		for j := 0; j < 91 && runes < n; j++ {
+		for range 91 {
+			if runes >= n {
+				break
+			}
 			b.WriteRune(benchNoiseRunes[i%len(benchNoiseRunes)])
 			runes++
 			i++
@@ -85,7 +88,10 @@ func buildMixedText(n int) string {
 	for runes < n/10 {
 		b.WriteString(engLine)
 		runes += len(engLine) // 纯 ASCII：字节数即 rune 数
-		for j := 0; j < len(engLine) && runes < n/10; j++ {
+		for range len(engLine) {
+			if runes >= n/10 {
+				break
+			}
 			b.WriteRune(benchNoiseRunes[i%len(benchNoiseRunes)])
 			runes++
 			i++
@@ -94,7 +100,10 @@ func buildMixedText(n int) string {
 	for runes < n {
 		b.WriteString(engLine)
 		runes += len(engLine)
-		for j := 0; j < 88 && runes < n; j++ {
+		for range 88 {
+			if runes >= n {
+				break
+			}
 			b.WriteRune(benchNoiseRunes[i%len(benchNoiseRunes)])
 			runes++
 			i++
@@ -168,16 +177,14 @@ func naiveFindAll(m *Matcher, text string) []Match {
 
 // BenchmarkFindAllChinese 纯中文长文本 FindAll。
 func BenchmarkFindAllChinese(b *testing.B) {
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		benchSink = benchMatcher.FindAll(benchTextZh)
 	}
 }
 
 // BenchmarkFindAllMixed 中英混合长文本 FindAll。
 func BenchmarkFindAllMixed(b *testing.B) {
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		benchSink = benchMatcher.FindAll(benchTextMix)
 	}
 }
@@ -185,8 +192,7 @@ func BenchmarkFindAllMixed(b *testing.B) {
 // BenchmarkFindNextFirst 中英混合文本只找第一个命中（体现达到目的即停）：
 // 文本开头即为大段 ASCII 噪声，跳跃能快速越过，找到即返回。
 func BenchmarkFindNextFirst(b *testing.B) {
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		m, ok := benchMatcher.FindNext(benchTextMix, 0)
 		if !ok {
 			b.Fatal("应有命中")
@@ -197,16 +203,14 @@ func BenchmarkFindNextFirst(b *testing.B) {
 
 // BenchmarkFindAllChineseNoSkip 纯中文长文本、无跳跃的朴素逐 rune 扫描（参照）。
 func BenchmarkFindAllChineseNoSkip(b *testing.B) {
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		benchSink = naiveFindAll(benchMatcher, benchTextZh)
 	}
 }
 
 // BenchmarkFindAllMixedNoSkip 中英混合长文本、无跳跃的朴素逐 rune 扫描（参照）。
 func BenchmarkFindAllMixedNoSkip(b *testing.B) {
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		benchSink = naiveFindAll(benchMatcher, benchTextMix)
 	}
 }

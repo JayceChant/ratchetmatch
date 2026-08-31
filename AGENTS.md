@@ -58,11 +58,12 @@
   ```
   修复缺陷时必须先添加能复现该缺陷的测试（红→绿），并同步更新 spec 相关条目。
 - **注释与文档语言**：代码注释、提交信息、spec 文档一律使用**中文**；标识符用英文。
-- **现代 Go 写法**（2026-08-31 `go fix` 审计结论，新代码不得再引入旧写法）：
+- **现代 Go 写法**（2026-08-31 `go fix` 审计 + b.Loop 补充结论，新代码不得再引入旧写法）：
   - 已知次数循环用 `for i := range n`，不再写 `for i := 0; i < n; i++`（Go 1.22+ range-over-int）；
   - 仅遍历切片/映射无需下标时用 `for _, v := range xs`，需要下标时 `for i, v := range xs`，不再用 C 式三段循环；
+  - 基准循环用 `for b.Loop() { ... }`，不再写 `for i := 0; i < b.N; i++`（Go 1.24+）：自动扣除每次迭代的管理开销、保持编译器优化（防止过度内联失真）、无需手动 `b.ResetTimer`（准备代码天然排除）；
   - `min` / `max` / `clear` 内建（Go 1.21+）优先于手写；`slices` / `maps` 标准库包优先于手写循环（排序、查找、去重等）；
-  - 上述已由 golangci-lint（gofmt/standard 集）部分覆盖，但 lint 不报 range-over-int 升级，靠本条约定自律；提交前可跑 `go fix ./...` 自查（应无输出）。
+  - 上述已由 golangci-lint（gofmt/standard 集）部分覆盖，但 lint 不报 range-over-int 与 b.N→b.Loop 升级，靠本条约定自律；提交前可跑 `go fix ./...` 自查（应无输出，注意 go fix 不含 b.Loop 升级）。
 - **公共 API 契约**：`New` / `FindAll` / `FindAllOverlapping` / `FindNext` 的签名与语义以 `spec/spec.md` 为准，不得随意变更；变更属破坏性修改（**BREAKING**），需在 spec 中显式声明并说明迁移方式。
 - **并发安全**：`Matcher` 构建后必须保持只读（无查询期可变状态），`FindAll` / `FindNext` 必须可无锁并发调用；新增字段/逻辑时不得违反此约束。
 - **性能基线**：BM 坏字符跳跃与 FindNext 首命中即停是本库核心卖点，改动扫描逻辑后应跑 `go test -bench . -run '^$'` 确认无明显回退（混合文本跳跃收益 ~1.4x、FindNext ~10x 为参考基线）。
