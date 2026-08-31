@@ -13,7 +13,7 @@ func benchKeywordPool(n int) []string {
 		nCh := 2 + i%3 // 2-4 字
 		kw := make([]rune, nCh)
 		// 用互素步长取字，避免词间前缀关系；i 递增保证词互不相同
-		for j := 0; j < nCh; j++ {
+		for j := range nCh {
 			kw[j] = chars[(i*17+j*29)%len(chars)]
 		}
 		kws = append(kws, string(kw))

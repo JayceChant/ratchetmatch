@@ -300,7 +300,7 @@ func TestFindAllOverlapping(t *testing.T) {
 func TestFindAllOverlappingRandom(t *testing.T) {
 	rng := rand.New(rand.NewSource(20260830))
 	pool := []string{"中", "中国", "中国人", "国", "人", "上海", "海口", "北京", "a", "ab", "口", "大", "海", "上"}
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		kws := drawKeywords(rng, pool, 2, 8)
 		text := randomText(rng, kws, 20, 80)
 		m := mustNew(t, kws)
@@ -422,7 +422,7 @@ func TestFindNext(t *testing.T) {
 func TestFindNextIterateEqualsFindAll(t *testing.T) {
 	rng := rand.New(rand.NewSource(20260828)) // 固定种子保证可复现
 	pool := []string{"中", "中国", "中国人", "国", "人", "上海", "海口", "北京", "a", "ab"}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		kws := drawKeywords(rng, pool, 2, 6)
 		text := randomText(rng, kws, 10, 40)
 		m := mustNew(t, kws)
@@ -503,7 +503,7 @@ func naiveSearch(keywords []string, text string) []Match {
 func TestRandomAgainstNaive(t *testing.T) {
 	rng := rand.New(rand.NewSource(20260828)) // 固定种子保证可复现
 	pool := []string{"中", "中国", "中国人", "国", "人", "上海", "海口", "北京", "a", "ab", "口", "大", "海", "上"}
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		kws := drawKeywords(rng, pool, 2, 8)
 		text := randomText(rng, kws, 20, 80)
 		m := mustNew(t, kws)
@@ -561,11 +561,11 @@ func TestConcurrent(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	for g := 0; g < 8; g++ {
+	for g := range 8 {
 		wg.Add(1)
 		go func(g int) {
 			defer wg.Done()
-			for i := 0; i < 100; i++ {
+			for i := range 100 {
 				if got := m.FindAll(text); !reflect.DeepEqual(got, wantAll) {
 					t.Errorf("goroutine %d 第 %d 次 FindAll 与预计算结果不一致", g, i)
 				}
