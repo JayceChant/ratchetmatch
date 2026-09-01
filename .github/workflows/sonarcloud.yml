@@ -1,0 +1,35 @@
+# SonarCloud 静态分析（代码异味/安全热点/重复率/覆盖率）
+# 前置条件（仓库端无法自完成，见 README「质量与持续集成」）：
+#   1. SonarCloud 导入本仓库（GitHub 账号登录即可，公仓免费）；
+#   2. 仓库 Secret 配置 SONAR_TOKEN；
+#   3.（可选，PR 装饰）安装 SonarCloud GitHub App。
+name: SonarCloud
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  sonarcloud:
+    name: SonarCloud Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # SonarCloud PR 分析需要完整历史做 blame 归属
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      # 覆盖率文件供 sonar.coverage.reportPaths 消费
+      - name: 测试并生成覆盖率
+        run: go test ./... -count=1 -coverprofile=coverage.txt -covermode=atomic
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

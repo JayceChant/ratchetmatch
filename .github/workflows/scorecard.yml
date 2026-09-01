@@ -1,0 +1,46 @@
+# OpenSSF Scorecard 供应链安全评分（结果发布到 GitHub Code Scanning）
+# 徽章与评分页见 README「质量与持续集成」；无需注册任何服务。
+name: Scorecard supply-chain security
+
+on:
+  push:
+    branches: [master]
+  branch_protection_rule:
+  schedule:
+    # 每周一 08:00 UTC 例行重评
+    - cron: "0 8 * * 1"
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: results.sarif

@@ -12,6 +12,8 @@
 - [x] Task 12: 基准新增朴素多模式对照（`naiveMultiFindAll` / `naiveMultiFindNext`：逐关键词 strings.Index 枚举 + 最左最长归并 / 首命中即停一轮扫描；TestNaiveMultiEquiv 守卫参照与 FindAll/FindNext 在基准语料下等价）。结论：50 词 × 10 万 rune 文本，FindAll 快 ~5.2x（中文）/ ~5.2x（混合）、FindNext 快 ~7.6x；既有基准全部保留无回退
 - [x] Task 13: 基准参照重构为三基线体系。naiveFindAll（同自动机无跳跃对照）改为 trieFindAll（纯 Trie 重启：复用 CSR 边与 rootNext、失配即回 root；词尾判定 outLens[0]==路径字节长——成品节点不存 termLen，fail 链继承的真后缀严格更短故等式精确）；新增 bmFindAll（教科书坏字符表逐词搜索）；naiveMulti* 更名 stringsIndex*（体现底层原理）；逐词归并抽为 collectLeftmostLongest 共用；等价守卫改为 TestBaselineEquiv（三参照 × 两语料 + 首命中）。实测（50 词 × 10 万 rune）：中文 FindAll 1.62ms vs Trie 1.52ms（~0.9x，持平属预期：该语料 fail 链收益小、跳跃无空间）/BM 9.13（~5.6x）/Index 9.25（~5.7x）；混合 0.94ms vs Trie 1.26（~1.3x）/BM 6.31（~6.7x）/Index 4.82（~5.1x）；首停 0.089ms vs 0.669ms（~7.6x）。同自动机无跳跃隔离对照随之移除（改以三基线呈现；历史跳跃收益 ~1.4–2x 见 2026-08-29/31 记录）
 
+- [x] Task 16: 接入在线质量服务（零账号即可用的全部落地）：.github/workflows/ci.yml（go 1.27.x/1.28.x/stable 测试矩阵、-race、gofmt/vet、golangci-lint v2.13 与本地配置同源、govulncheck 官方漏洞库扫描、覆盖率上传 Codecov——公仓免 token）；scorecard.yml（OpenSSF Scorecard，publish_results + SARIF 进 Code Scanning）；codeql.yml（GitHub 原生静态安全分析）；sonarcloud.yml + sonar-project.properties（SonarCloud，需 SONAR_TOKEN secret 后自动生效）。README 双语加 7 枚徽章与「质量与 CI」结果表 + 「第三方服务说明」（SonarCloud/Codecov/Scorecard 开通指引按优先级排列）。Snyk/Socket 未接：零第三方依赖，govulncheck 已覆盖标准库漏洞面，接入收益低。
+
 新增任务按 `Task N: 描述` 追加于上表。
 
 # 实现期修正记录（防回归：勿以「简化」或「优化」为由重蹈以下覆辙）

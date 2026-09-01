@@ -1,0 +1,67 @@
+# CI 主流程：多版本矩阵测试 + lint + 漏洞扫描 + 覆盖率上传
+# 对应 README「质量与持续集成」一节的 Codecov 徽章（公开仓库免 token 上传）。
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.go-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 最低支持版本 + 前一版 + 最新稳定版
+        go-version: ["1.27.x", "1.28.x", "stable"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go-version }}
+      - name: 构建
+        run: go build ./...
+      - name: go vet
+        run: go vet ./...
+      - name: gofmt 检查（必须无输出）
+        run: test -z "$(gofmt -l .)"
+      - name: 测试
+        run: go test ./... -count=1 -coverprofile=coverage.txt -covermode=atomic
+      - name: 竞态检测（仅最新版跑一次，避免矩阵重复）
+        if: matrix.go-version == 'stable'
+        run: go test -race ./... -count=1
+      - name: 上传覆盖率到 Codecov
+        if: matrix.go-version == 'stable'
+        uses: codecov/codecov-action@v7
+        with:
+          files: coverage.txt
+          fail_ci_if_error: false
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: golangci-lint（配置见 .golangci.yml，要求 0 issues）
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13
+
+  vulncheck:
+    name: Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: govulncheck（官方漏洞数据库扫描）
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

@@ -10,3 +10,4 @@
 - 并发：Matcher 构建后只读，8 goroutine × 100 次 FindAll/FindNext，`go test -race` 通过
 - fuzz：FuzzMatch 任意字节文本 × 关键词组合不 panic、全部不变量与 oracle 成立（3 分钟 449 万 execs 零失败）；崩溃样本回归 testdata/fuzz/
 - 工程：gofmt / go vet / golangci-lint（0 issues）/ go test ./...（-race 经 Windows 侧执行）全链路通过；基准无回退（New 持平或更优；跳跃隔离对照于 2026-09-01 并入三基线体系，历史混合 ~1.97x 见 tasks.md）；三参照基线（各 100 词 × 稀疏/重叠 × 10 万 rune）：中文 Trie ~1.1–1.2x / BM ~9.6–11.0x / Index ~9.9–11.1x，混合 Trie ~1.3–1.9x / BM ~11.5–13.3x / Index ~9.4–9.7x，FindNext 首停 ~12.5–19.7x（相对逐词全文扫），等价性由 TestBaselineEquiv（两套词库 × 两份文本）锁定
+- CI（2026-09-01）：GitHub Actions 四工作流（ci/scorecard/codeql/sonarcloud）+ Codecov 免 token 上传 + pkg.go.dev/goreportcard 自动抓取；README 双语徽章与结果链接就位；仅 SonarCloud 需 SONAR_TOKEN secret、Scorecard 提分需 master 分支保护
