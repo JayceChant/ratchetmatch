@@ -186,6 +186,15 @@ func naiveFindAll(m *Matcher, text string) []Match {
 // strings.Index 全量枚举出现，再按最左最长语义归并——起点最小优先、
 // 同起点取最长、已提交命中的 [Start,End) 区间不重叠。用于量化自动机
 // 单遍扫描（ACBM）相对朴素做法的整体收益；结果须与 FindAll 完全一致。
+//
+// 基线形态说明（2026-09-01 分析定论，勿重复实验）：strings.Index 在
+// amd64 走 internal/bytealg 的 SIMD 实现（AVX2/SSE2，一条指令比对
+// 16–32 字节），已是单串搜索的最快形态；换成「文本下标外循环 × 逐关键
+// 词逐字节比较」的纯标量双循环，同为 O(K·n) 但常数差一个向量宽度
+// （约 1500 万次标量迭代 vs 约 50 万次向量迭代），只会持平或更慢。
+// 朴素侧更强的形态只剩「首字节位图 + 同首字符桶」——但那本质是深度 1
+// 的 trie（自动机的 root），与被测实现的 byteFilter/rootNext 同构，
+// 不再是「朴素」基线；如需分层归因可另行实验，不入基准。
 func naiveMultiFindAll(keywords []string, text string) []Match {
 	type occ struct{ start, end int }
 	var occs []occ

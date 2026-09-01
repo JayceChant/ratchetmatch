@@ -18,7 +18,7 @@ go test -bench . -run '^$'
 
 Bad-character skipping gives ~1.4x speedup on mixed Chinese/English text; `FindNext` first-hit-stop is ~10x on long texts. On pure Chinese text with dense keywords, skip opportunities are limited and gains level off — expected behavior.
 
-Versus naive multi-pattern matching (per-keyword `strings.Index` over the whole text, semantics-equivalent reference implementation; 50 keywords × ~100k-rune texts):
+Versus naive multi-pattern matching (per-keyword `strings.Index` over the whole text, semantics-equivalent reference implementation; 50 keywords × ~100k-rune texts). Note this baseline is not a straw man: `strings.Index` is already the SIMD-accelerated standard-library search, and a hand-rolled byte-by-byte loop only loses the vectorization (analysis, see `bench_test.go`):
 
 | Comparison | ratchetmatch | Naive multi-pattern | Speedup |
 |---|---|---|---|
