@@ -10,6 +10,24 @@ An ACBM (Aho-Corasick + Boyer-Moore) multi-pattern matching library optimized fo
 
 **Not suitable**: fixed target text, varying keywords — in that case, preprocess the target text once (e.g., an inverted keyword index) and query by keyword instead of scanning by text.
 
+## Performance
+
+```bash
+go test -bench . -run '^$'
+```
+
+Bad-character skipping gives ~1.4x speedup on mixed Chinese/English text; `FindNext` first-hit-stop is ~10x on long texts. On pure Chinese text with dense keywords, skip opportunities are limited and gains level off — expected behavior.
+
+Versus naive multi-pattern matching (per-keyword `strings.Index` over the whole text, semantics-equivalent reference implementation; 50 keywords × ~100k-rune texts):
+
+| Comparison | ratchetmatch | Naive multi-pattern | Speedup |
+|---|---|---|---|
+| `FindAll` — pure Chinese long text | 1.74 ms | 9.17 ms | ~5.3x |
+| `FindAll` — mixed Chinese/English | 0.93 ms | 4.83 ms | ~5.2x |
+| `FindNext` first hit — mixed text | 0.09 ms | 0.66 ms | ~7.6x |
+
+The gap grows with dictionary size (the naive approach scans the full text once per keyword); figures are order-of-magnitude references that vary with hardware and data distribution.
+
 ## Design & Trade-offs
 
 - **Rune-level automaton**: the Trie and transition tables are built on Unicode code points; Chinese characters transition as whole characters, never as fragmented UTF-8 bytes.
@@ -63,16 +81,6 @@ Scan left to right: the smallest start wins; at the same start, the longest keyw
 | Proper containment → always longest | `{"国", "人", "中国人"}` / `"中国人"` | only `中国人` |
 
 When you need **all occurrences** (including overlapping ones), use `FindAllOverlapping`: e.g., dictionary `{"国", "人", "中国人"}` on `"中国人"` returns 3 hits. This mode has no `FindNext` variant (overlapping semantics is incompatible with stateless on-demand iteration).
-
-## Performance
-
-```bash
-go test -bench . -run '^$'
-```
-
-Bad-character skipping gives ~1.4x speedup on mixed Chinese/English text; `FindNext` first-hit-stop is ~10x on long texts. On pure Chinese text with dense keywords, skip opportunities are limited and gains level off — expected behavior.
-
-Versus naive multi-pattern matching (per-keyword `strings.Index` over the whole text), the single-pass automaton is ~5x faster on `FindAll` and ~7.6x on first-hit `FindNext` (50 keywords × 100k-rune texts); the gap grows with dictionary size.
 
 For the authoritative description of algorithm principles, API contracts, and acceptance scenarios, see `spec/spec.md`.
 
