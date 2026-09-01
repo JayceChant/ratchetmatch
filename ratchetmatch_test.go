@@ -155,7 +155,7 @@ func TestNewValidation(t *testing.T) {
 //   - 失败指针指向合法节点且严格更浅（无环，回退必然终止）；
 //   - root 首字符表与各关键词首 rune 集一致（跳跃判据正确性前提）。
 func TestCSRLayout(t *testing.T) {
-	m := mustNew(t, benchKeywords)
+	m := mustNew(t, benchKeywordsSparse)
 	if len(m.transKeys) != len(m.transVals) {
 		t.Fatalf("transKeys(%d) 与 transVals(%d) 长度不一致", len(m.transKeys), len(m.transVals))
 	}
@@ -183,7 +183,7 @@ func TestCSRLayout(t *testing.T) {
 	}
 	// root 首字符表与词库首 rune 集一致
 	firsts := make(map[rune]struct{})
-	for _, kw := range benchKeywords {
+	for _, kw := range benchKeywordsSparse {
 		for _, r := range kw {
 			firsts[r] = struct{}{}
 			break
@@ -215,7 +215,7 @@ func TestCSRLayout(t *testing.T) {
 //   - byteFilter 与词库首字节集逐位一致（跳跃安全性前提，rootNext 校验首 rune，
 //     过滤器校验首字节，二者共同保证跳跃判据无漏）。
 func TestAutomatonSemantics(t *testing.T) {
-	kws := benchKeywords
+	kws := benchKeywordsSparse
 	m := mustNew(t, kws)
 
 	// DFS 还原每个节点的路径字符串（root 为空串，不入表）

@@ -1,5 +1,16 @@
 // 本文件为 ratchetmatch 的内部测试包（package ratchetmatch），
 // 以便访问自动机私有字段复用同一份构建结果。
+//
+// 基准词库两套、各 100 关键词：
+//   - benchKeywordsSparse：稀疏词库——词间互不重叠/包含（城市、科技、
+//     成语等），fail 链与逐词归并少有发挥，考察扫描基本功；
+//   - benchKeywordsOverlap：重叠词库——大量前缀链（中国→中国人民→
+//     中国人民银行）、包含与子串关系（国家安全 ⊃ 国家/安全、国人 ⊂
+//     中国人）并含单字词（网、间），fail 链回退、outLens 继承与逐词
+//     归并成本均被显著放大。
+//
+// 每套词库各配纯中文 / 中英混合两份约 10 万 rune 长文本。
+//
 // 基准含三组「无自动机 / 半自动机」参照，从不同侧面量化正式实现（ACBM）的收益：
 //   - trieFindAll：纯 Trie 重启扫描——只走 trie 自有边，去掉失败指针回退
 //     与 BM 跳跃，失配即回 root 重启（量化 fail 链 + 跳跃的合并收益）；
@@ -8,7 +19,7 @@
 //   - stringsIndexFindAll / stringsIndexFindNext：逐关键词 strings.Index
 //     （标准库 SIMD 单串搜索，量化自动机单遍扫描的整体收益）。
 //
-// 三组参照与正式 API 的等价性由 TestBaselineEquiv 守卫。
+// 三组参照与正式 API 的等价性由 TestBaselineEquiv 守卫（两套词库 × 两份文本）。
 // example_test.go 为外部测试包（package ratchetmatch_test），
 // 两者并存是 Go 允许的。
 package ratchetmatch
@@ -22,55 +33,129 @@ import (
 	"unicode/utf8"
 )
 
-// benchKeywords 为 50 个中文关键词（城市、科技、成语等），作为基准词库。
-var benchKeywords = []string{
-	// 城市
+// benchKeywordsSparse 为稀疏基准词库：100 个互不重叠/包含的关键词。
+var benchKeywordsSparse = []string{
+	// 城市（30）
 	"上海", "北京", "广州", "深圳", "杭州", "南京", "成都", "重庆", "武汉", "西安",
 	"苏州", "天津", "长沙", "郑州", "青岛", "大连", "厦门", "宁波", "无锡", "佛山",
-	// 科技
+	"沈阳", "合肥", "昆明", "福州", "济南", "哈尔滨", "石家庄", "南昌", "长春", "贵阳",
+	// 科技（20）
 	"人工智能", "机器学习", "深度学习", "自然语言处理", "计算机视觉", "大数据",
 	"云计算", "分布式系统", "微服务", "知识图谱",
-	// 成语
+	"边缘计算", "联邦学习", "数据挖掘", "增强现实", "虚拟现实", "数字孪生",
+	"智慧城市", "自动驾驶", "芯片制造", "操作系统",
+	// 成语（30）
 	"画蛇添足", "守株待兔", "亡羊补牢", "掩耳盗铃", "买椟还珠", "拔苗助长",
 	"卧薪尝胆", "破釜沉舟", "闻鸡起舞", "刻舟求剑",
-	// 其他
+	"胸有成竹", "雪中送炭", "锦上添花", "画龙点睛", "叶公好龙",
+	"塞翁失马", "愚公移山", "精卫填海", "夸父逐日", "指鹿为马",
+	"朝三暮四", "东施效颦", "邯郸学步", "名列前茅", "滥竽充数",
+	"自相矛盾", "守口如瓶", "井底之蛙", "狐假虎威", "黔驴技穷",
+	// 政经与其他（20）
 	"一带一路", "粤港澳大湾区", "宏观调控", "供给侧", "碳中和", "新能源",
 	"量子计算", "区块链", "物联网", "数字化转型",
+	"共同富裕", "乡村振兴", "贸易摩擦", "知识产权", "基础设施",
+	"可持续发展", "现代化建设", "高质量发展", "国际贸易", "战略合作",
+}
+
+// benchKeywordsOverlap 为重叠基准词库：100 个关键词，按词族组织，
+// 族内前缀链 + 族间包含/子串，并含单字词，显著放大 fail 链与归并成本。
+var benchKeywordsOverlap = []string{
+	// 「中国」族：前缀链 + 内部子串（国人 ⊂ 中国人）
+	"中国", "中国人", "中国人民", "中国人民银行", "人民", "人民币", "人民银行", "国人", "银行",
+	// 「人工/智能/制造」族
+	"人工", "人工智能", "智能", "智能制造", "制造", "制造业",
+	// 「数据」族：前缀链 + 跨位子串（据中心、据库）
+	"数据", "大数据", "数据库", "数据中心", "据中心", "中心", "大数据中心", "据库",
+	// 「网络」族：含单字词
+	"网", "网络", "联网", "互联网", "物联网", "互联", "上网", "网民", "网站",
+	// 「经济/金融」族
+	"经济", "经济学", "经济发展", "宏观经济", "共享经济", "金融", "金融机构", "融资", "机构", "发展",
+	// 「科技/科学」族
+	"科技", "技术", "高科技", "高技术", "科学", "科学家", "黑科技",
+	// 「学习/教育」族
+	"学习", "深度学习", "机器学习", "教育", "教育部", "义务教育", "深度",
+	// 「国家/安全/社会」族：跨族包含（国家安全 ⊃ 国家、安全）
+	"国家", "安全", "国家安全", "保障", "社会保障", "社会", "社会主义",
+	// 「能源/时代」族
+	"能源", "新能源", "清洁能源", "新时代", "时代",
+	// 「数字/转型」族
+	"数字", "数字化", "数字化转型", "转型", "数字货币",
+	// 「公司/集团」族
+	"公司", "集团", "有限公司", "责任公司", "责任", "有限",
+	// 「城市」族：跨族包含（上海人 ⊃ 上海）
+	"上海", "上海人", "海口", "北京", "北京人", "京城",
+	// 「时间/空间」族：含单字词与跨字包含（之间 ⊃ 间）
+	"时间", "空间", "之间", "中间", "间接", "间",
+	// 「工厂」族
+	"工人", "工厂", "工资", "加工", "加工厂",
+	// 「港口」族
+	"出口", "口岸", "港口", "海港",
 }
 
 // benchNoiseRunes 为常见中文噪声字，用于构造不含关键词的长噪声段。
 var benchNoiseRunes = []rune("的在了是和有就不人都一个上中大来时地过说小后于会也这没能为着想看生那起把还进好们")
 
 var (
-	benchMatcher *Matcher // 由 benchKeywords 构建的自动机，两个文本共用
-	benchTextZh  string   // 纯中文长文本：约 10 万 rune（~300KB）
-	benchTextMix string   // 中英混合长文本：约 10 万 rune（约一半 ASCII，一半中文）
-	// benchBMTables 为每关键词预构建的 BM 坏字符表：与自动机构建同置循环外，
-	// 使三组参照的构建成本口径一致（搜索本身计入基准）。
-	benchBMTables [][256]int
+	// 稀疏词库：自动机、BM 坏字符表与两份长文本
+	benchMatcherSparse *Matcher
+	benchBMSparse      [][256]int
+	benchTextZhSparse  string // 纯中文：约 10 万 rune（~300KB）
+	benchTextMixSparse string // 中英混合：约 10 万 rune（约一半 ASCII）
+	// 重叠词库：同上四件套
+	benchMatcherOverlap *Matcher
+	benchBMOverlap      [][256]int
+	benchTextZhOverlap  string
+	benchTextMixOverlap string
 )
 
 // benchSink 防止编译器把基准循环内的被测调用优化掉。
 var benchSink []Match
 
 func init() {
+	// 两套词库各须 100 个且内部无重复（跨套允许同名，各自独立成自动机）。
+	for _, kws := range [][]string{benchKeywordsSparse, benchKeywordsOverlap} {
+		if len(kws) != 100 {
+			panic("基准词库须为 100 个关键词")
+		}
+		seen := make(map[string]struct{}, len(kws))
+		for _, kw := range kws {
+			if _, dup := seen[kw]; dup {
+				panic("基准词库存在重复关键词")
+			}
+			seen[kw] = struct{}{}
+		}
+	}
 	var err error
-	benchMatcher, err = New(benchKeywords)
-	if err != nil {
+	if benchMatcherSparse, err = New(benchKeywordsSparse); err != nil {
 		panic(err)
 	}
-	const targetRunes = 100_000
-	benchTextZh = buildChineseText(targetRunes)
-	benchTextMix = buildMixedText(targetRunes)
-	benchBMTables = make([][256]int, len(benchKeywords))
-	for i, kw := range benchKeywords {
-		benchBMTables[i] = buildBadCharTable(kw)
+	if benchMatcherOverlap, err = New(benchKeywordsOverlap); err != nil {
+		panic(err)
 	}
+	// BM 坏字符表在 init 期预构建：与自动机构建同置基准循环外，
+	// 使三组参照的构建成本口径一致（搜索本身计入基准）。
+	benchBMSparse = buildBMTables(benchKeywordsSparse)
+	benchBMOverlap = buildBMTables(benchKeywordsOverlap)
+	const targetRunes = 100_000
+	benchTextZhSparse = buildChineseText(targetRunes, benchKeywordsSparse)
+	benchTextMixSparse = buildMixedText(targetRunes, benchKeywordsSparse)
+	benchTextZhOverlap = buildChineseText(targetRunes, benchKeywordsOverlap)
+	benchTextMixOverlap = buildMixedText(targetRunes, benchKeywordsOverlap)
+}
+
+// buildBMTables 为每个关键词预构建 Boyer-Moore 坏字符表。
+func buildBMTables(keywords []string) [][256]int {
+	tables := make([][256]int, len(keywords))
+	for i, kw := range keywords {
+		tables[i] = buildBadCharTable(kw)
+	}
+	return tables
 }
 
 // buildChineseText 构造约 n rune 的纯中文文本：噪声字循环为主体，
 // 每隔一段噪声插入一个词库关键词，保证扫描路径上存在足够命中。
-func buildChineseText(n int) string {
+func buildChineseText(n int, keywords []string) string {
 	var b strings.Builder
 	b.Grow(n * 3)
 	runes := 0
@@ -87,7 +172,7 @@ func buildChineseText(n int) string {
 		if runes >= n {
 			break
 		}
-		kw := benchKeywords[i%len(benchKeywords)]
+		kw := keywords[i%len(keywords)]
 		b.WriteString(kw)
 		runes += len([]rune(kw))
 		i++
@@ -98,7 +183,7 @@ func buildChineseText(n int) string {
 // buildMixedText 构造约 n rune 的中英混合文本：英文句子（含数字、标点）
 // 与中文噪声段交替，各约占一半 rune，并穿插关键词；开头约 10% 为纯噪声
 // （不含关键词），供 FindNext 基准体现「找到即停」。
-func buildMixedText(n int) string {
+func buildMixedText(n int, keywords []string) string {
 	engLine := "The quick brown fox 42 jumps over the lazy dog, 2024-08-28 09:30; id=10086, rate=3.14% [ok]\n"
 	var b strings.Builder
 	b.Grow(n * 3)
@@ -131,7 +216,7 @@ func buildMixedText(n int) string {
 		if runes >= n {
 			break
 		}
-		kw := benchKeywords[i%len(benchKeywords)]
+		kw := keywords[i%len(keywords)]
 		b.WriteString(kw)
 		runes += len([]rune(kw))
 		i++
@@ -311,55 +396,74 @@ func stringsIndexFindNext(keywords []string, text string, offset int) (Match, bo
 	return best, found
 }
 
-// TestBaselineEquiv 校验三组参照在基准语料下与正式 API 等价（FindAll
-// 全量逐条相等、首命中与 FindAll 首条相等），防止基准对比的参照实现
-// 悄悄偏离语义（对比失真）。任意词库/文本的随机等价性由
+// TestBaselineEquiv 校验三组参照在基准语料（两套词库 × 两份文本）下与
+// 正式 API 等价（FindAll 全量逐条相等、首命中与 FindAll 首条相等），
+// 防止基准对比的参照实现悄悄偏离语义（对比失真）。重叠词库尤其覆盖
+// 前缀链、包含与单字词等归并边角。任意词库/文本的随机等价性由
 // ratchetmatch_test.go 的 naiveSearch oracle 测试覆盖，此处只守基准语料。
 func TestBaselineEquiv(t *testing.T) {
-	for _, text := range []struct{ name, body string }{
-		{"benchTextZh", benchTextZh},
-		{"benchTextMix", benchTextMix},
+	for _, d := range []struct {
+		name     string
+		matcher  *Matcher
+		keywords []string
+		tables   [][256]int
+		texts    [2]string
+	}{
+		{"稀疏词库", benchMatcherSparse, benchKeywordsSparse, benchBMSparse,
+			[2]string{benchTextZhSparse, benchTextMixSparse}},
+		{"重叠词库", benchMatcherOverlap, benchKeywordsOverlap, benchBMOverlap,
+			[2]string{benchTextZhOverlap, benchTextMixOverlap}},
 	} {
-		want := benchMatcher.FindAll(text.body)
-		for _, got := range [][]Match{
-			trieFindAll(benchMatcher, text.body),
-			bmFindAll(benchKeywords, benchBMTables, text.body),
-			stringsIndexFindAll(benchKeywords, text.body),
+		for _, text := range []struct{ name, body string }{
+			{"Zh", d.texts[0]},
+			{"Mix", d.texts[1]},
 		} {
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("%s: 参照实现与 FindAll 不一致（%d vs %d 条）",
-					text.name, len(got), len(want))
+			want := d.matcher.FindAll(text.body)
+			for _, got := range [][]Match{
+				trieFindAll(d.matcher, text.body),
+				bmFindAll(d.keywords, d.tables, text.body),
+				stringsIndexFindAll(d.keywords, text.body),
+			} {
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("%s/%s: 参照实现与 FindAll 不一致（%d vs %d 条）",
+						d.name, text.name, len(got), len(want))
+				}
+			}
+			next, ok := stringsIndexFindNext(d.keywords, text.body, 0)
+			if !ok {
+				t.Fatalf("%s/%s: stringsIndexFindNext 应有命中", d.name, text.name)
+			}
+			if first := want[0]; next != first {
+				t.Fatalf("%s/%s: stringsIndexFindNext = %+v, FindAll 首条 = %+v",
+					d.name, text.name, next, first)
 			}
 		}
-		next, ok := stringsIndexFindNext(benchKeywords, text.body, 0)
-		if !ok {
-			t.Fatalf("%s: stringsIndexFindNext 应有命中", text.name)
-		}
-		if first := want[0]; next != first {
-			t.Fatalf("%s: stringsIndexFindNext = %+v, FindAll 首条 = %+v", text.name, next, first)
-		}
 	}
 }
 
-// BenchmarkFindAllChinese 纯中文长文本 FindAll。
+// ---------------------------------------------------------------------------
+// 基准：正式实现（无后缀 = 稀疏词库；Overlap 后缀 = 重叠词库）
+// ---------------------------------------------------------------------------
+
+// BenchmarkFindAllChinese 纯中文长文本 FindAll（稀疏词库）。
 func BenchmarkFindAllChinese(b *testing.B) {
 	for b.Loop() {
-		benchSink = benchMatcher.FindAll(benchTextZh)
+		benchSink = benchMatcherSparse.FindAll(benchTextZhSparse)
 	}
 }
 
-// BenchmarkFindAllMixed 中英混合长文本 FindAll。
+// BenchmarkFindAllMixed 中英混合长文本 FindAll（稀疏词库）。
 func BenchmarkFindAllMixed(b *testing.B) {
 	for b.Loop() {
-		benchSink = benchMatcher.FindAll(benchTextMix)
+		benchSink = benchMatcherSparse.FindAll(benchTextMixSparse)
 	}
 }
 
-// BenchmarkFindNextFirst 中英混合文本只找第一个命中（体现达到目的即停）：
+// BenchmarkFindNextFirst 中英混合文本只找第一个命中（稀疏词库，体现即停）：
 // 文本开头即为大段 ASCII 噪声，跳跃能快速越过，找到即返回。
 func BenchmarkFindNextFirst(b *testing.B) {
 	for b.Loop() {
-		m, ok := benchMatcher.FindNext(benchTextMix, 0)
+		m, ok := benchMatcherSparse.FindNext(benchTextMixSparse, 0)
 		if !ok {
 			b.Fatal("应有命中")
 		}
@@ -367,53 +471,131 @@ func BenchmarkFindNextFirst(b *testing.B) {
 	}
 }
 
-// BenchmarkTrieChinese 纯中文长文本、纯 Trie 重启扫描（参照：无 fail 链、无跳跃）。
+// BenchmarkFindAllChineseOverlap 纯中文长文本 FindAll（重叠词库）。
+func BenchmarkFindAllChineseOverlap(b *testing.B) {
+	for b.Loop() {
+		benchSink = benchMatcherOverlap.FindAll(benchTextZhOverlap)
+	}
+}
+
+// BenchmarkFindAllMixedOverlap 中英混合长文本 FindAll（重叠词库）。
+func BenchmarkFindAllMixedOverlap(b *testing.B) {
+	for b.Loop() {
+		benchSink = benchMatcherOverlap.FindAll(benchTextMixOverlap)
+	}
+}
+
+// BenchmarkFindNextFirstOverlap 中英混合文本首个命中（重叠词库，体现即停）。
+func BenchmarkFindNextFirstOverlap(b *testing.B) {
+	for b.Loop() {
+		m, ok := benchMatcherOverlap.FindNext(benchTextMixOverlap, 0)
+		if !ok {
+			b.Fatal("应有命中")
+		}
+		benchSink = []Match{m}
+	}
+}
+
+// BenchmarkTrieChinese 纯中文长文本、纯 Trie 重启扫描（稀疏词库，参照：无 fail 链、无跳跃）。
 func BenchmarkTrieChinese(b *testing.B) {
 	for b.Loop() {
-		benchSink = trieFindAll(benchMatcher, benchTextZh)
+		benchSink = trieFindAll(benchMatcherSparse, benchTextZhSparse)
 	}
 }
 
-// BenchmarkTrieMixed 中英混合长文本、纯 Trie 重启扫描（参照：无 fail 链、无跳跃）。
+// BenchmarkTrieMixed 中英混合长文本、纯 Trie 重启扫描（稀疏词库，参照）。
 func BenchmarkTrieMixed(b *testing.B) {
 	for b.Loop() {
-		benchSink = trieFindAll(benchMatcher, benchTextMix)
+		benchSink = trieFindAll(benchMatcherSparse, benchTextMixSparse)
 	}
 }
 
-// BenchmarkBMChinese 纯中文长文本、逐关键词 Boyer-Moore 坏字符搜索（参照）。
+// BenchmarkTrieChineseOverlap 纯中文长文本、纯 Trie 重启扫描（重叠词库，参照）。
+func BenchmarkTrieChineseOverlap(b *testing.B) {
+	for b.Loop() {
+		benchSink = trieFindAll(benchMatcherOverlap, benchTextZhOverlap)
+	}
+}
+
+// BenchmarkTrieMixedOverlap 中英混合长文本、纯 Trie 重启扫描（重叠词库，参照）。
+func BenchmarkTrieMixedOverlap(b *testing.B) {
+	for b.Loop() {
+		benchSink = trieFindAll(benchMatcherOverlap, benchTextMixOverlap)
+	}
+}
+
+// BenchmarkBMChinese 纯中文长文本、逐关键词 Boyer-Moore 坏字符搜索（稀疏词库，参照）。
 func BenchmarkBMChinese(b *testing.B) {
 	for b.Loop() {
-		benchSink = bmFindAll(benchKeywords, benchBMTables, benchTextZh)
+		benchSink = bmFindAll(benchKeywordsSparse, benchBMSparse, benchTextZhSparse)
 	}
 }
 
-// BenchmarkBMMixed 中英混合长文本、逐关键词 Boyer-Moore 坏字符搜索（参照）。
+// BenchmarkBMMixed 中英混合长文本、逐关键词 Boyer-Moore 坏字符搜索（稀疏词库，参照）。
 func BenchmarkBMMixed(b *testing.B) {
 	for b.Loop() {
-		benchSink = bmFindAll(benchKeywords, benchBMTables, benchTextMix)
+		benchSink = bmFindAll(benchKeywordsSparse, benchBMSparse, benchTextMixSparse)
 	}
 }
 
-// BenchmarkStringsIndexChinese 纯中文长文本、逐关键词 strings.Index（参照：标准库 SIMD 单串搜索）。
+// BenchmarkBMChineseOverlap 纯中文长文本、逐关键词 Boyer-Moore 坏字符搜索（重叠词库，参照）。
+func BenchmarkBMChineseOverlap(b *testing.B) {
+	for b.Loop() {
+		benchSink = bmFindAll(benchKeywordsOverlap, benchBMOverlap, benchTextZhOverlap)
+	}
+}
+
+// BenchmarkBMMixedOverlap 中英混合长文本、逐关键词 Boyer-Moore 坏字符搜索（重叠词库，参照）。
+func BenchmarkBMMixedOverlap(b *testing.B) {
+	for b.Loop() {
+		benchSink = bmFindAll(benchKeywordsOverlap, benchBMOverlap, benchTextMixOverlap)
+	}
+}
+
+// BenchmarkStringsIndexChinese 纯中文长文本、逐关键词 strings.Index（稀疏词库，参照：标准库 SIMD 单串搜索）。
 func BenchmarkStringsIndexChinese(b *testing.B) {
 	for b.Loop() {
-		benchSink = stringsIndexFindAll(benchKeywords, benchTextZh)
+		benchSink = stringsIndexFindAll(benchKeywordsSparse, benchTextZhSparse)
 	}
 }
 
-// BenchmarkStringsIndexMixed 中英混合长文本、逐关键词 strings.Index（参照：标准库 SIMD 单串搜索）。
+// BenchmarkStringsIndexMixed 中英混合长文本、逐关键词 strings.Index（稀疏词库，参照）。
 func BenchmarkStringsIndexMixed(b *testing.B) {
 	for b.Loop() {
-		benchSink = stringsIndexFindAll(benchKeywords, benchTextMix)
+		benchSink = stringsIndexFindAll(benchKeywordsSparse, benchTextMixSparse)
 	}
 }
 
-// BenchmarkStringsIndexNextFirst 逐词 strings.Index 找第一个命中：50 个关键词
-// 各做一次全文搜索（对照 BenchmarkFindNextFirst）。
+// BenchmarkStringsIndexChineseOverlap 纯中文长文本、逐关键词 strings.Index（重叠词库，参照）。
+func BenchmarkStringsIndexChineseOverlap(b *testing.B) {
+	for b.Loop() {
+		benchSink = stringsIndexFindAll(benchKeywordsOverlap, benchTextZhOverlap)
+	}
+}
+
+// BenchmarkStringsIndexMixedOverlap 中英混合长文本、逐关键词 strings.Index（重叠词库，参照）。
+func BenchmarkStringsIndexMixedOverlap(b *testing.B) {
+	for b.Loop() {
+		benchSink = stringsIndexFindAll(benchKeywordsOverlap, benchTextMixOverlap)
+	}
+}
+
+// BenchmarkStringsIndexNextFirst 逐词 strings.Index 找第一个命中（稀疏词库，
+// 50→100 个关键词各做一次全文搜索，对照 BenchmarkFindNextFirst）。
 func BenchmarkStringsIndexNextFirst(b *testing.B) {
 	for b.Loop() {
-		m, ok := stringsIndexFindNext(benchKeywords, benchTextMix, 0)
+		m, ok := stringsIndexFindNext(benchKeywordsSparse, benchTextMixSparse, 0)
+		if !ok {
+			b.Fatal("应有命中")
+		}
+		benchSink = []Match{m}
+	}
+}
+
+// BenchmarkStringsIndexNextFirstOverlap 逐词 strings.Index 找第一个命中（重叠词库）。
+func BenchmarkStringsIndexNextFirstOverlap(b *testing.B) {
+	for b.Loop() {
+		m, ok := stringsIndexFindNext(benchKeywordsOverlap, benchTextMixOverlap, 0)
 		if !ok {
 			b.Fatal("应有命中")
 		}

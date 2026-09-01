@@ -18,28 +18,28 @@ go test -bench . -run '^$'
 
 Bad-character skipping gives ~1.4x speedup on mixed Chinese/English text; `FindNext` first-hit-stop is ~10x on long texts. On pure Chinese text with dense keywords, skip opportunities are limited and gains level off — expected behavior.
 
-Versus three semantics-equivalent baseline families (50 keywords × ~100k-rune texts; equivalence with the official API is guarded by tests, see `bench_test.go`):
+Versus three semantics-equivalent baseline families (two 100-keyword dictionaries × ~100k-rune texts: a **sparse** one with no overlap/containment, and an **overlap** one full of prefix chains, containment, substrings and single-character keywords; equivalence with the official API is guarded by tests, see `bench_test.go`):
 
-| Pure Chinese long text | Time | Speedup |
-|---|---|---|
-| ratchetmatch `FindAll` | 1.62 ms | — |
-| Plain Trie restart scan (no fail chain, no skip) | 1.52 ms | ~0.9x |
-| Per-keyword Boyer-Moore bad-character search | 9.09 ms | ~5.6x |
-| Per-keyword strings.Index (std SIMD) | 9.25 ms | ~5.7x |
+| Pure Chinese long text | Sparse | Speedup | Overlap | Speedup |
+|---|---|---|---|---|
+| ratchetmatch `FindAll` | 1.71 ms | — | 1.94 ms | — |
+| Plain Trie restart scan (no fail chain, no skip) | 2.14 ms | ~1.2x | 2.19 ms | ~1.1x |
+| Per-keyword Boyer-Moore bad-character search | 16.4 ms | ~9.6x | 21.4 ms | ~11.0x |
+| Per-keyword strings.Index (std SIMD) | 19.1 ms | ~11.1x | 19.2 ms | ~9.9x |
 
-| Mixed Chinese/English long text | Time | Speedup |
-|---|---|---|
-| ratchetmatch `FindAll` | 0.94 ms | — |
-| Plain Trie restart scan (no fail chain, no skip) | 1.26 ms | ~1.3x |
-| Per-keyword Boyer-Moore bad-character search | 5.87 ms | ~6.4x |
-| Per-keyword strings.Index (std SIMD) | 4.82 ms | ~5.1x |
+| Mixed Chinese/English long text | Sparse | Speedup | Overlap | Speedup |
+|---|---|---|---|---|
+| ratchetmatch `FindAll` | 0.95 ms | — | 1.06 ms | — |
+| Plain Trie restart scan (no fail chain, no skip) | 1.85 ms | ~1.9x | 1.36 ms | ~1.3x |
+| Per-keyword Boyer-Moore bad-character search | 10.9 ms | ~11.5x | 14.1 ms | ~13.3x |
+| Per-keyword strings.Index (std SIMD) | 9.2 ms | ~9.7x | 10.0 ms | ~9.4x |
 
-| `FindNext` first hit, mixed text | Time | Speedup |
-|---|---|---|
-| ratchetmatch `FindNext` | 0.09 ms | — |
-| Per-keyword strings.Index full-text sweep | 0.67 ms | ~7.6x |
+| `FindNext` first hit, mixed text | Sparse | Speedup | Overlap | Speedup |
+|---|---|---|---|---|
+| ratchetmatch `FindNext` | 0.09 ms | — | 0.13 ms | — |
+| Per-keyword strings.Index full-text sweep | 1.74 ms | ~19.7x | 1.67 ms | ~12.5x |
 
-Notes: per-keyword baselines (BM / strings.Index) slow down linearly with dictionary size (one full-text scan per keyword); the plain-Trie scan is a single pass independent of dictionary size, though fail chains add limited gain on this shared-prefix dictionary. `strings.Index` is already the SIMD-accelerated standard-library search — a hand-rolled byte-by-byte loop only loses the vectorization (analysis, see `bench_test.go`). Figures are order-of-magnitude references that vary with hardware and data distribution.
+Notes: per-keyword baselines (BM / strings.Index) slow down linearly with dictionary size — one full-text scan per keyword, doubling from 50 to 100 keywords; the overlap dictionary explodes the raw occurrence count for per-keyword BM while the automaton slows down only marginally (amortized O(1) fail chains; outLens inheritance flattens containment). The plain-Trie scan is largely independent of dictionary size, but without skipping it forfeits the mixed-text gain (~1.9x); under the overlap dictionary noise characters often hit keyword first-characters (中, 人, 大…), so skip and first-hit gains fall back accordingly (~1.3x / ~12.5x) — expected. `strings.Index` is already the SIMD-accelerated standard-library search — a hand-rolled byte-by-byte loop only loses the vectorization (analysis, see `bench_test.go`). Figures are order-of-magnitude references that vary with hardware and data distribution.
 
 ## Design & Trade-offs
 
