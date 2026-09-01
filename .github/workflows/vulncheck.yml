@@ -1,0 +1,24 @@
+# govulncheck 官方漏洞库扫描（独立 workflow）
+# 独立原因：GitHub Actions 状态徽章是 workflow 级而非 job 级，
+# 供 README 单独展示漏洞扫描徽章（须与 ci.yml 同触发条件）。
+name: govulncheck
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  vulncheck:
+    name: Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: govulncheck（官方漏洞数据库扫描）
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

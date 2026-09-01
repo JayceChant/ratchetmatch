@@ -2,7 +2,9 @@
 
 [![CI](https://github.com/JayceChant/ratchetmatch/actions/workflows/ci.yml/badge.svg)](https://github.com/JayceChant/ratchetmatch/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/JayceChant/ratchetmatch/actions/workflows/codeql.yml/badge.svg)](https://github.com/JayceChant/ratchetmatch/actions/workflows/codeql.yml)
+[![govulncheck](https://github.com/JayceChant/ratchetmatch/actions/workflows/vulncheck.yml/badge.svg)](https://github.com/JayceChant/ratchetmatch/actions/workflows/vulncheck.yml)
 [![codecov](https://codecov.io/gh/JayceChant/ratchetmatch/graph/badge.svg)](https://codecov.io/gh/JayceChant/ratchetmatch)
+[![SonarCloud](https://sonarcloud.io/api/project_badges/measure?project=JayceChant_ratchetmatch&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=JayceChant_ratchetmatch)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/JayceChant/ratchetmatch/badge)](https://scorecard.dev/viewer/?uri=github.com/JayceChant/ratchetmatch)
 [![go.dev reference](https://pkg.go.dev/badge/github.com/JayceChant/ratchetmatch.svg)](https://pkg.go.dev/github.com/JayceChant/ratchetmatch)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
