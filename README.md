@@ -5,7 +5,6 @@
 [![codecov](https://codecov.io/gh/JayceChant/ratchetmatch/graph/badge.svg)](https://codecov.io/gh/JayceChant/ratchetmatch)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/JayceChant/ratchetmatch/badge)](https://scorecard.dev/viewer/?uri=github.com/JayceChant/ratchetmatch)
 [![go.dev reference](https://pkg.go.dev/badge/github.com/JayceChant/ratchetmatch.svg)](https://pkg.go.dev/github.com/JayceChant/ratchetmatch)
-[![Go Report Card](https://goreportcard.com/badge/github.com/JayceChant/ratchetmatch)](https://goreportcard.com/report/github.com/JayceChant/ratchetmatch)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **English** | [简体中文](README_CN.md)
@@ -23,7 +22,6 @@ Automated quality gates, all links live on the default branch:
 | CodeQL | GitHub-native static security analysis (results in the Security tab) | [Security tab](https://github.com/JayceChant/ratchetmatch/security/code-scanning) |
 | OpenSSF Scorecard | Supply-chain security practices (pinned actions, tokens, branch protection, …) | [Scorecard report](https://scorecard.dev/viewer/?uri=github.com/JayceChant/ratchetmatch) |
 | pkg.go.dev | Official docs build + import check | [Package docs](https://pkg.go.dev/github.com/JayceChant/ratchetmatch) |
-| goreportcard | gofmt / go vet / golint / cyclomatic complexity | [Report card](https://goreportcard.com/report/github.com/JayceChant/ratchetmatch) |
 | SonarCloud | Code smells, security hotspots, duplication, coverage gate | [Dashboard](https://sonarcloud.io/summary/new_code?id=JayceChant_ratchetmatch) (requires one-time onboarding, see below) |
 
 ## When to Use
@@ -125,7 +123,7 @@ Released under the [MIT License](LICENSE).
 
 ## Notes on Third-Party Services
 
-Ready with zero manual setup (triggered by the workflow files in `.github/workflows/`): GitHub Actions (CI matrix, CodeQL, OpenSSF Scorecard), Codecov (public repositories upload without a token), pkg.go.dev and goreportcard (crawl the repo automatically once it is public).
+Ready with zero manual setup (triggered by the workflow files in `.github/workflows/`): GitHub Actions (CI matrix, CodeQL, OpenSSF Scorecard), Codecov (public repositories upload without a token), pkg.go.dev (crawls the repo automatically once it is public).
 
 One-time onboarding required (cannot be completed from inside this repository):
 

@@ -5,7 +5,6 @@
 [![codecov](https://codecov.io/gh/JayceChant/ratchetmatch/graph/badge.svg)](https://codecov.io/gh/JayceChant/ratchetmatch)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/JayceChant/ratchetmatch/badge)](https://scorecard.dev/viewer/?uri=github.com/JayceChant/ratchetmatch)
 [![go.dev reference](https://pkg.go.dev/badge/github.com/JayceChant/ratchetmatch.svg)](https://pkg.go.dev/github.com/JayceChant/ratchetmatch)
-[![Go Report Card](https://goreportcard.com/badge/github.com/JayceChant/ratchetmatch)](https://goreportcard.com/report/github.com/JayceChant/ratchetmatch)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 [English](README.md) | **简体中文**
@@ -23,7 +22,6 @@
 | CodeQL | GitHub 原生静态安全分析（结果在 Security 标签） | [Security 标签](https://github.com/JayceChant/ratchetmatch/security/code-scanning) |
 | OpenSSF Scorecard | 供应链安全实践评分（action 锁版本、令牌权限、分支保护等） | [评分报告](https://scorecard.dev/viewer/?uri=github.com/JayceChant/ratchetmatch) |
 | pkg.go.dev | 官方文档构建 + 导入检查 | [包文档](https://pkg.go.dev/github.com/JayceChant/ratchetmatch) |
-| goreportcard | gofmt / go vet / golint / 圈复杂度 | [质量报告](https://goreportcard.com/report/github.com/JayceChant/ratchetmatch) |
 | SonarCloud | 代码异味、安全热点、重复率、覆盖率门禁 | [看板](https://sonarcloud.io/summary/new_code?id=JayceChant_ratchetmatch)（需一次性开通，见文末） |
 
 ## 适用范围
@@ -125,7 +123,7 @@ for _, m := range matcher.FindAll(text) {
 
 ## 第三方服务说明
 
-零配置即生效（由 `.github/workflows/` 下的工作流文件驱动）：GitHub Actions（CI 矩阵、CodeQL、OpenSSF Scorecard）、Codecov（公开仓库免 token 上传）、pkg.go.dev 与 goreportcard（仓库公开后自动抓取）。
+零配置即生效（由 `.github/workflows/` 下的工作流文件驱动）：GitHub Actions（CI 矩阵、CodeQL、OpenSSF Scorecard）、Codecov（公开仓库免 token 上传）、pkg.go.dev（仓库公开后自动抓取）。
 
 需一次性开通（无法在仓库内完成，按优先级排序）：
 
