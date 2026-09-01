@@ -26,7 +26,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: stable
-      # 覆盖率文件供 sonar.coverage.reportPaths 消费
+      # 覆盖率文件供 sonar.go.coverage.reportPaths 消费
       - name: 测试并生成覆盖率
         run: go test ./... -count=1 -coverprofile=coverage.txt -covermode=atomic
       - name: SonarCloud Scan

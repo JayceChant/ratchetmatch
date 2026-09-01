@@ -1,6 +1,7 @@
 # 测试与基准临时产物
 test_out.txt
 bench_out.txt
+coverage.txt
 *.out
 *.test
 
