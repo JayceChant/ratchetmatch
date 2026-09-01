@@ -25,8 +25,8 @@ linters:
     - whitespace     # 控制块首尾多余空行（gofmt 不管的纵向问题）
 
 formatters:
-  # v2 默认 formatter 集为 gofmt+gci+gofumpt，这里显式收敛为仅 gofmt
-  default: none
+  # v2.13 起 schema 移除了 formatters.default 键，
+  # 启用的 formatter 即生效，这里只启用 gofmt
   enable:
     - gofmt
 
