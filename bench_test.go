@@ -1,9 +1,16 @@
 // 本文件为 ratchetmatch 的内部测试包（package ratchetmatch），
-// 以便访问自动机私有字段 m.nodes 复用同一份构建结果，只对比「扫描期有无跳跃」。
-// example_test.go 为外部测试包（package ratchetmatch_test），两者并存是 Go 允许的。
+// 以便访问自动机私有字段 m.nodes 复用同一份构建结果。
+// 基准含两组参照：naiveFindAll 对比「扫描期有无 BM 跳跃」（同一自动机、
+// 唯一差异是 root 态是否 skipForward，fail 链两边共用、相互抵消）；
+// naiveMultiFindAll / naiveMultiFindNext 对比「朴素多模式匹配」（逐关键词
+// strings.Index，量化自动机单遍扫描的整体收益）。example_test.go 为外部
+// 测试包（package ratchetmatch_test），两者并存是 Go 允许的。
 package ratchetmatch
 
 import (
+	"cmp"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -175,6 +182,89 @@ func naiveFindAll(m *Matcher, text string) []Match {
 	return out
 }
 
+// naiveMultiFindAll 是朴素多模式参照实现：不建自动机，逐关键词独立
+// strings.Index 全量枚举出现，再按最左最长语义归并——起点最小优先、
+// 同起点取最长、已提交命中的 [Start,End) 区间不重叠。用于量化自动机
+// 单遍扫描（ACBM）相对朴素做法的整体收益；结果须与 FindAll 完全一致。
+func naiveMultiFindAll(keywords []string, text string) []Match {
+	type occ struct{ start, end int }
+	var occs []occ
+	for _, kw := range keywords {
+		for i := 0; ; {
+			j := strings.Index(text[i:], kw)
+			if j < 0 {
+				break
+			}
+			i += j
+			occs = append(occs, occ{i, i + len(kw)})
+			i += len(kw) // 与 FindAll 同为非重叠语义：同关键词的相邻出现不重叠
+		}
+	}
+	slices.SortFunc(occs, func(a, b occ) int {
+		if c := cmp.Compare(a.start, b.start); c != 0 {
+			return c
+		}
+		return cmp.Compare(b.end, a.end) // 同起点长的在前
+	})
+	var out []Match
+	for _, o := range occs {
+		if n := len(out); n > 0 && o.start < out[n-1].End {
+			continue // 与已提交命中重叠：更左/更长候选已被归并，跳过
+		}
+		out = append(out, Match{Start: o.start, End: o.end, Keyword: text[o.start:o.end]})
+	}
+	return out
+}
+
+// naiveMultiFindNext 是朴素版「首命中即停」：仅对 50 个关键词做一轮
+// strings.Index（各取最左出现、保留最长），比较后返回全局第一个——
+// 未触及的文本不再有任何 strings.Index 调用。与 FindNext 语义一致，
+// 用于量化首命中即停在朴素做法下的收益上限。
+func naiveMultiFindNext(keywords []string, text string, offset int) (Match, bool) {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(text) {
+		return Match{}, false
+	}
+	best := Match{}
+	found := false
+	for _, kw := range keywords {
+		j := strings.Index(text[offset:], kw)
+		if j < 0 {
+			continue
+		}
+		s, e := offset+j, offset+j+len(kw)
+		if !found || s < best.Start || (s == best.Start && e > best.End) {
+			best, found = Match{Start: s, End: e, Keyword: kw}, true
+		}
+	}
+	return best, found
+}
+
+// TestNaiveMultiEquiv 校验两组朴素参照在基准语料下与正式 API 等价，
+// 防止基准对比的参照实现悄悄偏离语义（对比失真）。
+func TestNaiveMultiEquiv(t *testing.T) {
+	for _, text := range []struct{ name, body string }{
+		{"benchTextZh", benchTextZh},
+		{"benchTextMix", benchTextMix},
+	} {
+		want := benchMatcher.FindAll(text.body)
+		got := naiveMultiFindAll(benchKeywords, text.body)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: naiveMultiFindAll 与 FindAll 不一致（%d vs %d 条）",
+				text.name, len(got), len(want))
+		}
+		next, ok := naiveMultiFindNext(benchKeywords, text.body, 0)
+		if !ok {
+			t.Fatalf("%s: naiveMultiFindNext 应有命中", text.name)
+		}
+		if first := want[0]; next != first {
+			t.Fatalf("%s: naiveMultiFindNext = %+v, FindAll 首条 = %+v", text.name, next, first)
+		}
+	}
+}
+
 // BenchmarkFindAllChinese 纯中文长文本 FindAll。
 func BenchmarkFindAllChinese(b *testing.B) {
 	for b.Loop() {
@@ -212,5 +302,31 @@ func BenchmarkFindAllChineseNoSkip(b *testing.B) {
 func BenchmarkFindAllMixedNoSkip(b *testing.B) {
 	for b.Loop() {
 		benchSink = naiveFindAll(benchMatcher, benchTextMix)
+	}
+}
+
+// BenchmarkNaiveMultiChinese 纯中文长文本、逐关键词 strings.Index 的朴素多模式匹配（参照）。
+func BenchmarkNaiveMultiChinese(b *testing.B) {
+	for b.Loop() {
+		benchSink = naiveMultiFindAll(benchKeywords, benchTextZh)
+	}
+}
+
+// BenchmarkNaiveMultiMixed 中英混合长文本、逐关键词 strings.Index 的朴素多模式匹配（参照）。
+func BenchmarkNaiveMultiMixed(b *testing.B) {
+	for b.Loop() {
+		benchSink = naiveMultiFindAll(benchKeywords, benchTextMix)
+	}
+}
+
+// BenchmarkNaiveMultiNextFirst 朴素做法找第一个命中：50 个关键词各做一次
+// 全文 strings.Index（对照 BenchmarkFindNextFirst）。
+func BenchmarkNaiveMultiNextFirst(b *testing.B) {
+	for b.Loop() {
+		m, ok := naiveMultiFindNext(benchKeywords, benchTextMix, 0)
+		if !ok {
+			b.Fatal("应有命中")
+		}
+		benchSink = []Match{m}
 	}
 }

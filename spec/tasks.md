@@ -9,6 +9,7 @@
 - [x] Task 9: 稀疏转移 + fail 回退优化（替代 DFA 全量表，决策见 spec「转移表内存布局」）：New 快 1.3–2.9x、allocs 减半，扫描不回退
 - [x] Task 10: FindAllOverlapping 重叠全量返回（独立循环，默认路径零改动）
 - [x] Task 11: 测试强化与 Go 原生 fuzz（白盒语义重推导、黑盒边界、fuzz 不变量 oracle；449 万 execs 零失败，两项 fuzz 发现转正为修复）
+- [x] Task 12: 基准新增朴素多模式对照（`naiveMultiFindAll` / `naiveMultiFindNext`：逐关键词 strings.Index 枚举 + 最左最长归并 / 首命中即停一轮扫描；TestNaiveMultiEquiv 守卫参照与 FindAll/FindNext 在基准语料下等价）。结论：50 词 × 10 万 rune 文本，FindAll 快 ~5.2x（中文）/ ~5.2x（混合）、FindNext 快 ~7.6x；既有基准全部保留无回退
 
 新增任务按 `Task N: 描述` 追加于上表。
 
