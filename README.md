@@ -18,15 +18,28 @@ go test -bench . -run '^$'
 
 Bad-character skipping gives ~1.4x speedup on mixed Chinese/English text; `FindNext` first-hit-stop is ~10x on long texts. On pure Chinese text with dense keywords, skip opportunities are limited and gains level off — expected behavior.
 
-Versus naive multi-pattern matching (per-keyword `strings.Index` over the whole text, semantics-equivalent reference implementation; 50 keywords × ~100k-rune texts). Note this baseline is not a straw man: `strings.Index` is already the SIMD-accelerated standard-library search, and a hand-rolled byte-by-byte loop only loses the vectorization (analysis, see `bench_test.go`):
+Versus three semantics-equivalent baseline families (50 keywords × ~100k-rune texts; equivalence with the official API is guarded by tests, see `bench_test.go`):
 
-| Comparison | ratchetmatch | Naive multi-pattern | Speedup |
-|---|---|---|---|
-| `FindAll` — pure Chinese long text | 1.74 ms | 9.17 ms | ~5.3x |
-| `FindAll` — mixed Chinese/English | 0.93 ms | 4.83 ms | ~5.2x |
-| `FindNext` first hit — mixed text | 0.09 ms | 0.66 ms | ~7.6x |
+| Pure Chinese long text | Time | Speedup |
+|---|---|---|
+| ratchetmatch `FindAll` | 1.62 ms | — |
+| Plain Trie restart scan (no fail chain, no skip) | 1.52 ms | ~0.9x |
+| Per-keyword Boyer-Moore bad-character search | 9.13 ms | ~5.6x |
+| Per-keyword strings.Index (std SIMD) | 9.25 ms | ~5.7x |
 
-The gap grows with dictionary size (the naive approach scans the full text once per keyword); figures are order-of-magnitude references that vary with hardware and data distribution.
+| Mixed Chinese/English long text | Time | Speedup |
+|---|---|---|
+| ratchetmatch `FindAll` | 0.94 ms | — |
+| Plain Trie restart scan (no fail chain, no skip) | 1.26 ms | ~1.3x |
+| Per-keyword Boyer-Moore bad-character search | 6.31 ms | ~6.7x |
+| Per-keyword strings.Index (std SIMD) | 4.82 ms | ~5.1x |
+
+| `FindNext` first hit, mixed text | Time | Speedup |
+|---|---|---|
+| ratchetmatch `FindNext` | 0.09 ms | — |
+| Per-keyword strings.Index full-text sweep | 0.67 ms | ~7.6x |
+
+Notes: per-keyword baselines (BM / strings.Index) slow down linearly with dictionary size (one full-text scan per keyword); the plain-Trie scan is a single pass independent of dictionary size, though fail chains add limited gain on this shared-prefix dictionary. `strings.Index` is already the SIMD-accelerated standard-library search — a hand-rolled byte-by-byte loop only loses the vectorization (analysis, see `bench_test.go`). Figures are order-of-magnitude references that vary with hardware and data distribution.
 
 ## Design & Trade-offs
 

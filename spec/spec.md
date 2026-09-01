@@ -144,5 +144,5 @@
 ### Requirement: 质量与工程化
 
 - `gofmt`、`go vet`、`golangci-lint` 通过；`go test ./...` 与 `-race` 全部通过
-- `example_test.go` 可运行示例（FindAll 与 FindNext 按需迭代）；`bench_test.go` 基准（中文长文本、中英混合 × 跳跃对照、FindNext 首停，以及逐关键词 `strings.Index` 的朴素多模式对照——参照实现与正式 API 在基准语料下等价由守卫测试锁定，防止对比失真）
+- `example_test.go` 可运行示例（FindAll 与 FindNext 按需迭代）；`bench_test.go` 基准三组参照基线 × 中文/混合长文本与 FindNext 首停：纯 Trie 重启（trieFindAll，去 fail 链与跳跃）、纯 Boyer-Moore 逐词坏字符（bmFindAll）、逐关键词 `strings.Index`（stringsIndexFindAll/FindNext，标准库 SIMD）——参照与正式 API 在基准语料下等价由 TestBaselineEquiv 守卫，防止对比失真
 - **Go 原生 fuzz**（`fuzz_test.go`）对任意字节文本 × 关键词组合验证：绝不 panic；`New` 错误契约；`FindAll` 区间合法/切片恒等/Start 升序/相邻不重叠；`FindAllOverlapping` 与逐词枚举一致且蕴含 `FindAll`；`FindNext` 以 End 迭代 == `FindAll`、任意逐字节 offset == 后缀 FindAll 首条平移。种子语料随源码提交，崩溃样本回归 `testdata/fuzz/`

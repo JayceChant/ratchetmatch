@@ -1,10 +1,16 @@
 // 本文件为 ratchetmatch 的内部测试包（package ratchetmatch），
-// 以便访问自动机私有字段 m.nodes 复用同一份构建结果。
-// 基准含两组参照：naiveFindAll 对比「扫描期有无 BM 跳跃」（同一自动机、
-// 唯一差异是 root 态是否 skipForward，fail 链两边共用、相互抵消）；
-// naiveMultiFindAll / naiveMultiFindNext 对比「朴素多模式匹配」（逐关键词
-// strings.Index，量化自动机单遍扫描的整体收益）。example_test.go 为外部
-// 测试包（package ratchetmatch_test），两者并存是 Go 允许的。
+// 以便访问自动机私有字段复用同一份构建结果。
+// 基准含三组「无自动机 / 半自动机」参照，从不同侧面量化正式实现（ACBM）的收益：
+//   - trieFindAll：纯 Trie 重启扫描——只走 trie 自有边，去掉失败指针回退
+//     与 BM 跳跃，失配即回 root 重启（量化 fail 链 + 跳跃的合并收益）；
+//   - bmFindAll：纯 Boyer-Moore——逐关键词坏字符规则整文搜索
+//     （量化「有单串跳跃、无自动机」与 ACBM 的差距）；
+//   - stringsIndexFindAll / stringsIndexFindNext：逐关键词 strings.Index
+//     （标准库 SIMD 单串搜索，量化自动机单遍扫描的整体收益）。
+//
+// 三组参照与正式 API 的等价性由 TestBaselineEquiv 守卫。
+// example_test.go 为外部测试包（package ratchetmatch_test），
+// 两者并存是 Go 允许的。
 package ratchetmatch
 
 import (
@@ -126,90 +132,14 @@ func buildMixedText(n int) string {
 	return b.String()
 }
 
-// naiveFindAll 是 search.go 中 scan 的「无跳跃」参照实现：逐 rune 解码并做
-// 段内查找 + fail 回退（state==0 时也不调用 skipForward，照常解码转移），
-// 最左最长链收集逻辑与正式实现完全一致，用于量化 Boyer-Moore 跳跃的收益。
-func naiveFindAll(m *Matcher, text string) []Match {
-	n := len(text)
-	pos := 0
-	var state int32
-	var chain []pendHit // 待提交链（与 scan 相同的规则；基准中无需内联数组优化）
-	var out []Match
-	for pos < n {
-		// 与正式实现的唯一区别：不调用 m.skipForward，root 态也逐 rune 转移。
-		r, size := utf8.DecodeRuneInString(text[pos:])
-		state = m.step(state, r) // 段内查找 + fail 回退，语义与正式实现一致
-		pos += size
-		// 与正式实现一致：最左最长链规则（更左弹出链尾、同起点取更长、
-		// 不重叠入链、其余遮蔽）；自动机回 root 或扫描结束时提交整链
-		for _, l := range m.nodes[state].outLens {
-			cs, ce := int32(pos)-l, int32(pos)
-			for len(chain) > 0 && cs < chain[len(chain)-1].start {
-				chain = chain[:len(chain)-1]
-			}
-			if len(chain) == 0 {
-				chain = append(chain, pendHit{cs, ce})
-				continue
-			}
-			tail := &chain[len(chain)-1]
-			switch {
-			case cs == tail.start:
-				if ce > tail.end {
-					tail.end = ce
-				}
-			case cs >= tail.end:
-				chain = append(chain, pendHit{cs, ce})
-			}
-		}
-		if state == 0 {
-			for _, p := range chain {
-				out = append(out, Match{
-					Start:   int(p.start),
-					End:     int(p.end),
-					Keyword: text[p.start:p.end],
-				})
-			}
-			chain = chain[:0]
-		}
-	}
-	for _, p := range chain {
-		out = append(out, Match{
-			Start:   int(p.start),
-			End:     int(p.end),
-			Keyword: text[p.start:p.end],
-		})
-	}
-	return out
-}
+// interval 是一个候选命中的字节区间 [start,end)。
+type interval struct{ start, end int }
 
-// naiveMultiFindAll 是朴素多模式参照实现：不建自动机，逐关键词独立
-// strings.Index 全量枚举出现，再按最左最长语义归并——起点最小优先、
-// 同起点取最长、已提交命中的 [Start,End) 区间不重叠。用于量化自动机
-// 单遍扫描（ACBM）相对朴素做法的整体收益；结果须与 FindAll 完全一致。
-//
-// 基线形态说明（2026-09-01 分析定论，勿重复实验）：strings.Index 在
-// amd64 走 internal/bytealg 的 SIMD 实现（AVX2/SSE2，一条指令比对
-// 16–32 字节），已是单串搜索的最快形态；换成「文本下标外循环 × 逐关键
-// 词逐字节比较」的纯标量双循环，同为 O(K·n) 但常数差一个向量宽度
-// （约 1500 万次标量迭代 vs 约 50 万次向量迭代），只会持平或更慢。
-// 朴素侧更强的形态只剩「首字节位图 + 同首字符桶」——但那本质是深度 1
-// 的 trie（自动机的 root），与被测实现的 byteFilter/rootNext 同构，
-// 不再是「朴素」基线；如需分层归因可另行实验，不入基准。
-func naiveMultiFindAll(keywords []string, text string) []Match {
-	type occ struct{ start, end int }
-	var occs []occ
-	for _, kw := range keywords {
-		for i := 0; ; {
-			j := strings.Index(text[i:], kw)
-			if j < 0 {
-				break
-			}
-			i += j
-			occs = append(occs, occ{i, i + len(kw)})
-			i += len(kw) // 与 FindAll 同为非重叠语义：同关键词的相邻出现不重叠
-		}
-	}
-	slices.SortFunc(occs, func(a, b occ) int {
+// collectLeftmostLongest 把逐词枚举出的全部出现归并为非重叠最左最长结果：
+// 按起点升序（同起点更长在前）排序后扫描，丢弃与已提交命中重叠者。
+// 与 FindAll 语义一致，供 strings.Index / Boyer-Moore 两组逐词参照共用。
+func collectLeftmostLongest(text string, occs []interval) []Match {
+	slices.SortFunc(occs, func(a, b interval) int {
 		if c := cmp.Compare(a.start, b.start); c != 0 {
 			return c
 		}
@@ -225,11 +155,133 @@ func naiveMultiFindAll(keywords []string, text string) []Match {
 	return out
 }
 
-// naiveMultiFindNext 是朴素版「首命中即停」：仅对 50 个关键词做一轮
-// strings.Index（各取最左出现、保留最长），比较后返回全局第一个——
-// 未触及的文本不再有任何 strings.Index 调用。与 FindNext 语义一致，
-// 用于量化首命中即停在朴素做法下的收益上限。
-func naiveMultiFindNext(keywords []string, text string, offset int) (Match, bool) {
+// trieFindAll 是纯 Trie 重启参照实现：只使用正式自动机的 trie 自有边
+// （rootNext + 各节点 CSR 段），不走失败指针（step 换成单次 find，失配即
+// 回 root 重启），也不做 BM 跳跃。每轮从 root 起沿一条 trie 路径下行，
+// 记录途径的最后一个词尾（该前缀下完整出现的最长关键词），路径终止即
+// 提交并从命中起点的下一 rune 重启；无命中则从起点的下一 rune 重启。
+// 与正式实现共用同一份 trie，对比差异恰为「fail 链 + BM 跳跃」两个优化。
+// 逐 rune 解码（无效字节按 RuneError 前进 1 字节），非重叠最左最长语义
+// 与 FindAll 一致。词尾判定用 outLens[0] == 起点至今路径的字节长度：成品
+// 节点不存 termLen，而 outLens 严格降序、首元素即自身词长（fail 链继承的
+// 真后缀关键词严格更短），该等式成立当且仅当路径节点是词尾。
+func trieFindAll(m *Matcher, text string) []Match {
+	n := len(text)
+	pos := 0
+	var out []Match
+	for pos < n {
+		// 从 root 起尝试一条 trie 路径：起点 rune 无对应边则跳过一个 rune
+		r, startSize := utf8.DecodeRuneInString(text[pos:])
+		node, ok := m.rootNext[r]
+		if !ok {
+			pos += startSize
+			continue
+		}
+		p := pos + startSize // 起点 rune 已消费为路径首步
+		end := -1            // 当前路径上最后一个词尾位置（-1 表示无完整命中）
+		for {
+			if lens := m.nodes[node].outLens; len(lens) > 0 && int(lens[0]) == p-pos {
+				end = p // 词尾判定：outLens[0] 恰为自身词长（见函数注释）
+			}
+			if m.nodes[node].count == 0 || p >= n {
+				break // 叶子或文本耗尽：路径终止
+			}
+			r, size := utf8.DecodeRuneInString(text[p:])
+			next := m.find(node, r)
+			if next == 0 {
+				break // 失配：路径终止（无 fail 链，不回退）
+			}
+			node = next
+			p += size
+		}
+		if end < 0 {
+			pos += startSize // 本起点无完整命中：前进一个 rune 重新起步
+			continue
+		}
+		out = append(out, Match{Start: pos, End: end, Keyword: text[pos:end]})
+		_, sz := utf8.DecodeRuneInString(text[end:]) // 命中后从其下一 rune 重启
+		pos = end + sz
+	}
+	return out
+}
+
+// buildBadCharTable 为单个关键词构建 Boyer-Moore 坏字符表：
+// table[b] 为字节 b 在关键词内最后一次出现位置到串尾的距离，
+// 未出现则为 len(kw)（失配时窗口滑过整个关键词）。
+func buildBadCharTable(kw string) [256]int {
+	var table [256]int
+	for i := range table {
+		table[i] = len(kw)
+	}
+	for i := range len(kw) - 1 {
+		table[kw[i]] = len(kw) - 1 - i
+	}
+	return table
+}
+
+// bmFindAll 是纯 Boyer-Moore 参照实现：逐关键词做教科书式坏字符搜索
+// （窗口右端对齐、自右向左逐字节比较、失配按坏字符表跳跃），枚举全部
+// 出现后归并为最左最长。无自动机、无 fail 链，量化「单串跳跃」相对
+// ACBM 的差距；与 stringsIndexFindAll（无跳跃、SIMD）互为另一端参照。
+// 每词坏字符表的构建开销计入基准，不做缓存（保持参照自包含）。
+func bmFindAll(keywords []string, text string) []Match {
+	n := len(text)
+	var occs []interval
+	for _, kw := range keywords {
+		m := len(kw)
+		if m == 0 || m > n {
+			continue
+		}
+		table := buildBadCharTable(kw)
+		for i := 0; i+m <= n; {
+			// 窗口 [i, i+m)：自右向左比较，失配按坏字符表跳跃
+			j := m - 1
+			for j >= 0 && text[i+j] == kw[j] {
+				j--
+			}
+			if j < 0 {
+				occs = append(occs, interval{i, i + m})
+				i += m // 同关键词非重叠枚举；跨词重叠在归并时处理
+				continue
+			}
+			// 坏字符 text[i+j]：滑动窗口使其最后一次出现对齐到失配位置；
+			// 表值不足 1 时（坏字符在失配位右侧重复出现）至少前进 1
+			i += max(table[text[i+j]]-(m-1-j), 1)
+		}
+	}
+	return collectLeftmostLongest(text, occs)
+}
+
+// stringsIndexFindAll 是逐关键词 strings.Index 参照实现：不建自动机，
+// 逐关键词独立搜索全量枚举出现，再按最左最长语义归并。用于量化自动机
+// 单遍扫描（ACBM）相对朴素做法的整体收益；结果须与 FindAll 完全一致。
+//
+// 基线形态说明（2026-09-01 分析定论，勿重复实验）：strings.Index 在
+// amd64 走 internal/bytealg 的 SIMD 实现（AVX2/SSE2，一条指令比对
+// 16–32 字节），已是单串搜索的最快形态；换成「文本下标外循环 × 逐关键
+// 词逐字节比较」的纯标量双循环，同为 O(K·n) 但常数差一个向量宽度
+// （约 1500 万次标量迭代 vs 约 50 万次向量迭代），只会持平或更慢。
+func stringsIndexFindAll(keywords []string, text string) []Match {
+	var occs []interval
+	for _, kw := range keywords {
+		for i := 0; ; {
+			j := strings.Index(text[i:], kw)
+			if j < 0 {
+				break
+			}
+			i += j
+			occs = append(occs, interval{i, i + len(kw)})
+			i += len(kw) // 同关键词非重叠枚举；跨词重叠在归并时处理
+		}
+	}
+	return collectLeftmostLongest(text, occs)
+}
+
+// stringsIndexFindNext 是逐词 strings.Index 的「首命中即停」参照：每个
+// 关键词只做一次全文搜索取最左出现，比较后返回全局第一个——未触及的
+// 文本不再有任何搜索调用。与 FindNext 语义一致，用于量化首命中即停在
+// 朴素做法下的收益，对照 BenchmarkFindNextFirst。
+func stringsIndexFindNext(keywords []string, text string, offset int) (Match, bool) {
 	if offset < 0 {
 		offset = 0
 	}
@@ -251,25 +303,32 @@ func naiveMultiFindNext(keywords []string, text string, offset int) (Match, bool
 	return best, found
 }
 
-// TestNaiveMultiEquiv 校验两组朴素参照在基准语料下与正式 API 等价，
-// 防止基准对比的参照实现悄悄偏离语义（对比失真）。
-func TestNaiveMultiEquiv(t *testing.T) {
+// TestBaselineEquiv 校验三组参照在基准语料下与正式 API 等价（FindAll
+// 全量逐条相等、首命中与 FindAll 首条相等），防止基准对比的参照实现
+// 悄悄偏离语义（对比失真）。任意词库/文本的随机等价性由
+// ratchetmatch_test.go 的 naiveSearch oracle 测试覆盖，此处只守基准语料。
+func TestBaselineEquiv(t *testing.T) {
 	for _, text := range []struct{ name, body string }{
 		{"benchTextZh", benchTextZh},
 		{"benchTextMix", benchTextMix},
 	} {
 		want := benchMatcher.FindAll(text.body)
-		got := naiveMultiFindAll(benchKeywords, text.body)
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s: naiveMultiFindAll 与 FindAll 不一致（%d vs %d 条）",
-				text.name, len(got), len(want))
+		for _, got := range [][]Match{
+			trieFindAll(benchMatcher, text.body),
+			bmFindAll(benchKeywords, text.body),
+			stringsIndexFindAll(benchKeywords, text.body),
+		} {
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("%s: 参照实现与 FindAll 不一致（%d vs %d 条）",
+					text.name, len(got), len(want))
+			}
 		}
-		next, ok := naiveMultiFindNext(benchKeywords, text.body, 0)
+		next, ok := stringsIndexFindNext(benchKeywords, text.body, 0)
 		if !ok {
-			t.Fatalf("%s: naiveMultiFindNext 应有命中", text.name)
+			t.Fatalf("%s: stringsIndexFindNext 应有命中", text.name)
 		}
 		if first := want[0]; next != first {
-			t.Fatalf("%s: naiveMultiFindNext = %+v, FindAll 首条 = %+v", text.name, next, first)
+			t.Fatalf("%s: stringsIndexFindNext = %+v, FindAll 首条 = %+v", text.name, next, first)
 		}
 	}
 }
@@ -300,39 +359,53 @@ func BenchmarkFindNextFirst(b *testing.B) {
 	}
 }
 
-// BenchmarkFindAllChineseNoSkip 纯中文长文本、无跳跃的朴素逐 rune 扫描（参照）。
-func BenchmarkFindAllChineseNoSkip(b *testing.B) {
+// BenchmarkTrieChinese 纯中文长文本、纯 Trie 重启扫描（参照：无 fail 链、无跳跃）。
+func BenchmarkTrieChinese(b *testing.B) {
 	for b.Loop() {
-		benchSink = naiveFindAll(benchMatcher, benchTextZh)
+		benchSink = trieFindAll(benchMatcher, benchTextZh)
 	}
 }
 
-// BenchmarkFindAllMixedNoSkip 中英混合长文本、无跳跃的朴素逐 rune 扫描（参照）。
-func BenchmarkFindAllMixedNoSkip(b *testing.B) {
+// BenchmarkTrieMixed 中英混合长文本、纯 Trie 重启扫描（参照：无 fail 链、无跳跃）。
+func BenchmarkTrieMixed(b *testing.B) {
 	for b.Loop() {
-		benchSink = naiveFindAll(benchMatcher, benchTextMix)
+		benchSink = trieFindAll(benchMatcher, benchTextMix)
 	}
 }
 
-// BenchmarkNaiveMultiChinese 纯中文长文本、逐关键词 strings.Index 的朴素多模式匹配（参照）。
-func BenchmarkNaiveMultiChinese(b *testing.B) {
+// BenchmarkBMChinese 纯中文长文本、逐关键词 Boyer-Moore 坏字符搜索（参照）。
+func BenchmarkBMChinese(b *testing.B) {
 	for b.Loop() {
-		benchSink = naiveMultiFindAll(benchKeywords, benchTextZh)
+		benchSink = bmFindAll(benchKeywords, benchTextZh)
 	}
 }
 
-// BenchmarkNaiveMultiMixed 中英混合长文本、逐关键词 strings.Index 的朴素多模式匹配（参照）。
-func BenchmarkNaiveMultiMixed(b *testing.B) {
+// BenchmarkBMMixed 中英混合长文本、逐关键词 Boyer-Moore 坏字符搜索（参照）。
+func BenchmarkBMMixed(b *testing.B) {
 	for b.Loop() {
-		benchSink = naiveMultiFindAll(benchKeywords, benchTextMix)
+		benchSink = bmFindAll(benchKeywords, benchTextMix)
 	}
 }
 
-// BenchmarkNaiveMultiNextFirst 朴素做法找第一个命中：50 个关键词各做一次
-// 全文 strings.Index（对照 BenchmarkFindNextFirst）。
-func BenchmarkNaiveMultiNextFirst(b *testing.B) {
+// BenchmarkStringsIndexChinese 纯中文长文本、逐关键词 strings.Index（参照：标准库 SIMD 单串搜索）。
+func BenchmarkStringsIndexChinese(b *testing.B) {
 	for b.Loop() {
-		m, ok := naiveMultiFindNext(benchKeywords, benchTextMix, 0)
+		benchSink = stringsIndexFindAll(benchKeywords, benchTextZh)
+	}
+}
+
+// BenchmarkStringsIndexMixed 中英混合长文本、逐关键词 strings.Index（参照：标准库 SIMD 单串搜索）。
+func BenchmarkStringsIndexMixed(b *testing.B) {
+	for b.Loop() {
+		benchSink = stringsIndexFindAll(benchKeywords, benchTextMix)
+	}
+}
+
+// BenchmarkStringsIndexNextFirst 逐词 strings.Index 找第一个命中：50 个关键词
+// 各做一次全文搜索（对照 BenchmarkFindNextFirst）。
+func BenchmarkStringsIndexNextFirst(b *testing.B) {
+	for b.Loop() {
+		m, ok := stringsIndexFindNext(benchKeywords, benchTextMix, 0)
 		if !ok {
 			b.Fatal("应有命中")
 		}

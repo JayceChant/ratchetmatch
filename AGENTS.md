@@ -56,7 +56,7 @@
   - 提交前可跑 `go fix ./...` 自查（应无输出，注意它不含 b.Loop 升级）。
 - **公共 API 契约**：`New` / `FindAll` / `FindAllOverlapping` / `FindNext` 的签名与语义以 `spec/spec.md` 为准，不得随意变更。
 - **并发安全**：`Matcher` 构建后必须保持只读（无查询期可变状态），`FindAll` / `FindNext` 必须可无锁并发调用。
-- **性能基线**：BM 坏字符跳跃与 FindNext 首命中即停是本库核心卖点，改动扫描逻辑后应跑 `go test -bench . -run '^$'` 确认无明显回退（混合文本跳跃 ~1.4x、FindNext ~10x 为参考基线）。
+- **性能基线**：BM 坏字符跳跃与 FindNext 首命中即停是本库核心卖点，改动扫描逻辑后应跑 `go test -bench . -run '^$'` 确认无明显回退（FindNext ~7.6–10x 与三参照基线——纯 Trie 重启 / 纯 Boyer-Moore / strings.Index——为参考；跳跃隔离对照 NoSkip 已于 2026-09-01 移除，历史混合跳跃 ~1.4–2x 见 spec/tasks.md）。
 
 ## 4. 工作循环（每次任务必须遵守）
 
