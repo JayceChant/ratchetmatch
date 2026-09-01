@@ -123,10 +123,10 @@ for _, m := range matcher.FindAll(text) {
 
 ## 第三方服务说明
 
-零配置即生效（由 `.github/workflows/` 下的工作流文件驱动）：GitHub Actions（CI 矩阵、CodeQL、OpenSSF Scorecard）、Codecov（公开仓库免 token 上传）、pkg.go.dev（仓库公开后自动抓取）。
+零配置即生效（由 `.github/workflows/` 下的工作流文件驱动）：GitHub Actions（CI 矩阵、CodeQL、OpenSSF Scorecard）、pkg.go.dev（仓库公开后自动抓取）。
 
 需一次性开通（无法在仓库内完成，按优先级排序）：
 
-1. [SonarCloud](https://sonarcloud.io/)：用 GitHub 账号登录并导入 `JayceChant/ratchetmatch`（公开仓库免费），然后在仓库设置里添加 `SONAR_TOKEN` Secret；可选安装 SonarCloud GitHub App 用于 PR 装饰。项目 key 与组织已在 `sonar-project.properties` 中配好。
-2. [Codecov](https://codecov.io/)（可选）：公开仓库免 token 即可用；登录后可启用 commit 状态 / PR 检查与覆盖率历史。
+1. [SonarCloud](https://sonarcloud.io/)：用 GitHub 账号登录并导入 `JayceChant/ratchetmatch`（公开仓库免费），然后在仓库设置里添加 `SONAR_TOKEN` Secret，并在 Administration → Analysis Method 中选择 CI-based analysis（关闭 Automatic Analysis）；可选安装 SonarCloud GitHub App 用于 PR 装饰。项目 key 与组织已在 `sonar-project.properties` 中配好。
+2. [Codecov](https://codecov.io/)（可选）：在仓库设置里添加 `CODECOV_TOKEN` Secret（新版 Codecov 上传需 token），CI 会自动上传覆盖率；登录后可启用 commit 状态 / PR 检查与覆盖率历史。
 3. [OpenSSF Scorecard](https://scorecard.dev/)（可选，用于提分）：为 `master` 开启分支保护（要求 PR 审查与状态检查），并启用 GitHub 依赖图——工作流会自动发布评分结果。

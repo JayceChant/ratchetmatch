@@ -123,10 +123,10 @@ Released under the [MIT License](LICENSE).
 
 ## Notes on Third-Party Services
 
-Ready with zero manual setup (triggered by the workflow files in `.github/workflows/`): GitHub Actions (CI matrix, CodeQL, OpenSSF Scorecard), Codecov (public repositories upload without a token), pkg.go.dev (crawls the repo automatically once it is public).
+Ready with zero manual setup (triggered by the workflow files in `.github/workflows/`): GitHub Actions (CI matrix, CodeQL, OpenSSF Scorecard), pkg.go.dev (crawls the repo automatically once it is public).
 
 One-time onboarding required (cannot be completed from inside this repository):
 
-1. [SonarCloud](https://sonarcloud.io/): log in with the GitHub account, import `JayceChant/ratchetmatch` (free for public repositories), then add the `SONAR_TOKEN` repository secret; optionally install the SonarCloud GitHub App for PR decoration. Project key and organization are already set in `sonar-project.properties`.
-2. [Codecov](https://codecov.io/) (optional): public repositories work tokenless out of the box; log in to enable commit statuses / PR checks and coverage history.
+1. [SonarCloud](https://sonarcloud.io/): log in with the GitHub account, import `JayceChant/ratchetmatch` (free for public repositories), then add the `SONAR_TOKEN` repository secret and switch Administration → Analysis Method to CI-based analysis (disable Automatic Analysis); optionally install the SonarCloud GitHub App for PR decoration. Project key and organization are already set in `sonar-project.properties`.
+2. [Codecov](https://codecov.io/) (optional): add the `CODECOV_TOKEN` repository secret (uploads now require a token); log in to enable commit statuses / PR checks and coverage history.
 3. [OpenSSF Scorecard](https://scorecard.dev/) (optional, improves the score): enable branch protection on `master` (require PR reviews and status checks) and enable GitHub's dependency graph — the workflow already publishes results automatically.

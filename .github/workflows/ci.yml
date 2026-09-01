@@ -1,5 +1,5 @@
 # CI 主流程：多版本矩阵测试 + lint + 漏洞扫描 + 覆盖率上传
-# 对应 README「质量与持续集成」一节的 Codecov 徽章（公开仓库免 token 上传）。
+# 对应 README「质量与持续集成」一节的 Codecov 徽章（需仓库 Secret 配置 CODECOV_TOKEN）。
 name: CI
 
 on:
@@ -40,6 +40,7 @@ jobs:
         if: matrix.go-version == 'stable'
         uses: codecov/codecov-action@v7
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.txt
           fail_ci_if_error: false
 
