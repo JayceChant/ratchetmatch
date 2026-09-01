@@ -25,5 +25,6 @@
 - 2026-08-31 更名 ratchetsearch → ratchetmatch：原名「search」与本库模式匹配语义不符且与 API 家族（Find*/Match）不一致，"ratchet search" 又是系统发生学既有术语、Go 生态另有知名同名工具，检索混淆重。新名保留棘轮隐喻（文本指针单向只进不退），以 match 修正语义。仓库无下游引用，零迁移成本。
 - 2026-08-31 确定许可证为 MIT：宽松许可（允许闭源商用，仅要求保留版权声明）+ 不含专利条款（本人决策，算法库专利风险自评可控）+ 企业采用友好（MIT 认知度最高、法务审查零成本）。署名 Jayce Chant（陈思杰）。
 - 2026-09-01 README 性能段前移至「适用范围」之后、「设计与权衡」之前，朴素多模式对比由行文改为表格呈现（双语同步，无行为变化）。
+- [x] Task 14: BM 参照口径修正：坏字符表改为 init 期预构建（benchBMTables），与自动机/归并表的构建成本同置基准循环外（bmFindAll 改接表签名）。复测：BM 中文 9.09ms（~5.6x）、混合 5.87ms（~6.4x），混合较表内构建（6.31ms）省 ~7%；逐词基线仍慢于 strings.Index 的 SIMD 全文扫描。
 - 2026-09-01 基准参照体系改版：NoSkip（同自动机去跳跃）对照被纯 Trie 重启基线取代，跳跃收益不再能从基准套件直接复现（历史值保留于本文件与 checklist）；三基线（Trie/BM/strings.Index）与正式 API 的等价由 TestBaselineEquiv 在基准语料上锁定。勿再以为基准中存在无跳跃对照。
 - 2026-09-01 朴素基线形态定论（分析结论，未改基准代码）：strings.Index 已是标准库 SIMD（internal/bytealg，AVX2/SSE2）最快单串搜索；「文本下标外循环 × 逐词逐字节比较」同为 O(K·n) 但常数差一个向量宽度（~1500 万标量迭代 vs ~50 万向量迭代），只会持平或更慢。更强的「首字节位图+同首字符桶」本质是深度 1 trie（与被测 byteFilter/rootNext 同构），不算朴素基线，不入基准；理由固化于 bench_test.go naiveMultiFindAll 注释与 README。

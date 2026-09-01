@@ -9,4 +9,4 @@
 - FindAllOverlapping：全量保留、End 升序同 End 长度降序，与逐词 strings.Index 枚举一致
 - 并发：Matcher 构建后只读，8 goroutine × 100 次 FindAll/FindNext，`go test -race` 通过
 - fuzz：FuzzMatch 任意字节文本 × 关键词组合不 panic、全部不变量与 oracle 成立（3 分钟 449 万 execs 零失败）；崩溃样本回归 testdata/fuzz/
-- 工程：gofmt / go vet / golangci-lint（0 issues）/ go test ./...（-race 经 Windows 侧执行）全链路通过；基准无回退（FindNext ~10x、New 持平或更优；跳跃隔离对照于 2026-09-01 并入三基线体系，历史混合 ~1.97x 见 tasks.md）；三参照基线（50 词 × 10 万 rune）：中文 Trie ~0.9x / BM ~5.6x / Index ~5.7x，混合 Trie ~1.3x / BM ~6.7x / Index ~5.1x，首停 ~7.6x，等价性由 TestBaselineEquiv 锁定
+- 工程：gofmt / go vet / golangci-lint（0 issues）/ go test ./...（-race 经 Windows 侧执行）全链路通过；基准无回退（FindNext ~10x、New 持平或更优；跳跃隔离对照于 2026-09-01 并入三基线体系，历史混合 ~1.97x 见 tasks.md）；三参照基线（50 词 × 10 万 rune）：中文 Trie ~0.9x / BM ~5.6x / Index ~5.7x，混合 Trie ~1.3x / BM ~6.4x / Index ~5.1x，首停 ~7.6x，等价性由 TestBaselineEquiv 锁定

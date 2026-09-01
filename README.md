@@ -24,14 +24,14 @@ Versus three semantics-equivalent baseline families (50 keywords × ~100k-rune t
 |---|---|---|
 | ratchetmatch `FindAll` | 1.62 ms | — |
 | Plain Trie restart scan (no fail chain, no skip) | 1.52 ms | ~0.9x |
-| Per-keyword Boyer-Moore bad-character search | 9.13 ms | ~5.6x |
+| Per-keyword Boyer-Moore bad-character search | 9.09 ms | ~5.6x |
 | Per-keyword strings.Index (std SIMD) | 9.25 ms | ~5.7x |
 
 | Mixed Chinese/English long text | Time | Speedup |
 |---|---|---|
 | ratchetmatch `FindAll` | 0.94 ms | — |
 | Plain Trie restart scan (no fail chain, no skip) | 1.26 ms | ~1.3x |
-| Per-keyword Boyer-Moore bad-character search | 6.31 ms | ~6.7x |
+| Per-keyword Boyer-Moore bad-character search | 5.87 ms | ~6.4x |
 | Per-keyword strings.Index (std SIMD) | 4.82 ms | ~5.1x |
 
 | `FindNext` first hit, mixed text | Time | Speedup |

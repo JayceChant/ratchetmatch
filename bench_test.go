@@ -45,6 +45,9 @@ var (
 	benchMatcher *Matcher // 由 benchKeywords 构建的自动机，两个文本共用
 	benchTextZh  string   // 纯中文长文本：约 10 万 rune（~300KB）
 	benchTextMix string   // 中英混合长文本：约 10 万 rune（约一半 ASCII，一半中文）
+	// benchBMTables 为每关键词预构建的 BM 坏字符表：与自动机构建同置循环外，
+	// 使三组参照的构建成本口径一致（搜索本身计入基准）。
+	benchBMTables [][256]int
 )
 
 // benchSink 防止编译器把基准循环内的被测调用优化掉。
@@ -59,6 +62,10 @@ func init() {
 	const targetRunes = 100_000
 	benchTextZh = buildChineseText(targetRunes)
 	benchTextMix = buildMixedText(targetRunes)
+	benchBMTables = make([][256]int, len(benchKeywords))
+	for i, kw := range benchKeywords {
+		benchBMTables[i] = buildBadCharTable(kw)
+	}
 }
 
 // buildChineseText 构造约 n rune 的纯中文文本：噪声字循环为主体，
@@ -223,16 +230,17 @@ func buildBadCharTable(kw string) [256]int {
 // （窗口右端对齐、自右向左逐字节比较、失配按坏字符表跳跃），枚举全部
 // 出现后归并为最左最长。无自动机、无 fail 链，量化「单串跳跃」相对
 // ACBM 的差距；与 stringsIndexFindAll（无跳跃、SIMD）互为另一端参照。
-// 每词坏字符表的构建开销计入基准，不做缓存（保持参照自包含）。
-func bmFindAll(keywords []string, text string) []Match {
+// 坏字符表由调用方预构建传入：其他参照的构建成本（自动机、归并表）
+// 均在基准循环外，BM 表同口径处理。
+func bmFindAll(keywords []string, tables [][256]int, text string) []Match {
 	n := len(text)
 	var occs []interval
-	for _, kw := range keywords {
+	for i, kw := range keywords {
 		m := len(kw)
 		if m == 0 || m > n {
 			continue
 		}
-		table := buildBadCharTable(kw)
+		table := tables[i] // 表由调用方预构建（与其他参照的构建成本同置循环外）
 		for i := 0; i+m <= n; {
 			// 窗口 [i, i+m)：自右向左比较，失配按坏字符表跳跃
 			j := m - 1
@@ -315,7 +323,7 @@ func TestBaselineEquiv(t *testing.T) {
 		want := benchMatcher.FindAll(text.body)
 		for _, got := range [][]Match{
 			trieFindAll(benchMatcher, text.body),
-			bmFindAll(benchKeywords, text.body),
+			bmFindAll(benchKeywords, benchBMTables, text.body),
 			stringsIndexFindAll(benchKeywords, text.body),
 		} {
 			if !reflect.DeepEqual(got, want) {
@@ -376,14 +384,14 @@ func BenchmarkTrieMixed(b *testing.B) {
 // BenchmarkBMChinese 纯中文长文本、逐关键词 Boyer-Moore 坏字符搜索（参照）。
 func BenchmarkBMChinese(b *testing.B) {
 	for b.Loop() {
-		benchSink = bmFindAll(benchKeywords, benchTextZh)
+		benchSink = bmFindAll(benchKeywords, benchBMTables, benchTextZh)
 	}
 }
 
 // BenchmarkBMMixed 中英混合长文本、逐关键词 Boyer-Moore 坏字符搜索（参照）。
 func BenchmarkBMMixed(b *testing.B) {
 	for b.Loop() {
-		benchSink = bmFindAll(benchKeywords, benchTextMix)
+		benchSink = bmFindAll(benchKeywords, benchBMTables, benchTextMix)
 	}
 }
 

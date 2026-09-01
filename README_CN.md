@@ -24,14 +24,14 @@ go test -bench . -run '^$'
 |---|---|---|
 | ratchetmatch `FindAll` | 1.62 ms | — |
 | 纯 Trie 重启扫描（无 fail 链、无跳跃） | 1.52 ms | ~0.9x |
-| 逐关键词 Boyer-Moore 坏字符搜索 | 9.13 ms | ~5.6x |
+| 逐关键词 Boyer-Moore 坏字符搜索 | 9.09 ms | ~5.6x |
 | 逐关键词 strings.Index（标准库 SIMD） | 9.25 ms | ~5.7x |
 
 | 对比（中英混合长文本） | 耗时 | 加速比 |
 |---|---|---|
 | ratchetmatch `FindAll` | 0.94 ms | — |
 | 纯 Trie 重启扫描（无 fail 链、无跳跃） | 1.26 ms | ~1.3x |
-| 逐关键词 Boyer-Moore 坏字符搜索 | 6.31 ms | ~6.7x |
+| 逐关键词 Boyer-Moore 坏字符搜索 | 5.87 ms | ~6.4x |
 | 逐关键词 strings.Index（标准库 SIMD） | 4.82 ms | ~5.1x |
 
 | 对比（FindNext 首命中，混合文本） | 耗时 | 加速比 |
