@@ -11,19 +11,6 @@
 
 针对中文优化的 ACBM（Aho-Corasick + Boyer-Moore）多模式匹配库：一次构建词库自动机，对每条长文本单遍扫描，返回全部关键词命中。零第三方依赖，仅使用 Go 标准库。
 
-## 质量与 CI
-
-自动化质量门禁，链接默认指向默认分支最新结果：
-
-| 服务 | 检查内容 | 结果入口 |
-|---|---|---|
-| GitHub Actions [CI](.github/workflows/ci.yml) | Go 多版本测试矩阵（1.27 / 1.28 / stable）、`-race`、`go vet`、`gofmt`、`golangci-lint`、`govulncheck` | [Actions 页](https://github.com/JayceChant/ratchetmatch/actions/workflows/ci.yml) |
-| Codecov | 行级测试覆盖率，按提交与 PR 增量覆盖率 | [覆盖率详情](https://codecov.io/gh/JayceChant/ratchetmatch) |
-| CodeQL | GitHub 原生静态安全分析（结果在 Security 标签） | [Security 标签](https://github.com/JayceChant/ratchetmatch/security/code-scanning) |
-| OpenSSF Scorecard | 供应链安全实践评分（action 锁版本、令牌权限、分支保护等） | [评分报告](https://scorecard.dev/viewer/?uri=github.com/JayceChant/ratchetmatch) |
-| pkg.go.dev | 官方文档构建 + 导入检查 | [包文档](https://pkg.go.dev/github.com/JayceChant/ratchetmatch) |
-| SonarCloud | 代码异味、安全热点、重复率、覆盖率门禁 | [看板](https://sonarcloud.io/summary/new_code?id=JayceChant_ratchetmatch)（需一次性开通，见文末） |
-
 ## 适用范围
 
 **适合**：词库固定、目标文本多变——一次 `New` 构建后，对大量长文本反复查询（内容过滤、审计、风控等流式扫描场景）。
@@ -120,13 +107,3 @@ for _, m := range matcher.FindAll(text) {
 ## 许可证
 
 本项目基于 [MIT License](LICENSE) 发布。
-
-## 第三方服务说明
-
-零配置即生效（由 `.github/workflows/` 下的工作流文件驱动）：GitHub Actions（CI 矩阵、CodeQL、OpenSSF Scorecard）、pkg.go.dev（仓库公开后自动抓取）。
-
-需一次性开通（无法在仓库内完成，按优先级排序）：
-
-1. [SonarCloud](https://sonarcloud.io/)：用 GitHub 账号登录并导入 `JayceChant/ratchetmatch`（公开仓库免费），然后在仓库设置里添加 `SONAR_TOKEN` Secret，并在 Administration → Analysis Method 中选择 CI-based analysis（关闭 Automatic Analysis）；可选安装 SonarCloud GitHub App 用于 PR 装饰。项目 key 与组织已在 `sonar-project.properties` 中配好。
-2. [Codecov](https://codecov.io/)（可选）：在仓库设置里添加 `CODECOV_TOKEN` Secret（新版 Codecov 上传需 token），CI 会自动上传覆盖率；登录后可启用 commit 状态 / PR 检查与覆盖率历史。
-3. [OpenSSF Scorecard](https://scorecard.dev/)（可选，用于提分）：为 `master` 开启分支保护（要求 PR 审查与状态检查），并启用 GitHub 依赖图——工作流会自动发布评分结果。

@@ -11,19 +11,6 @@
 
 An ACBM (Aho-Corasick + Boyer-Moore) multi-pattern matching library optimized for Chinese text: build the keyword automaton once, scan each long text in a single pass, and get every keyword hit. Zero third-party dependencies, Go standard library only.
 
-## Quality & CI
-
-Automated quality gates, all links live on the default branch:
-
-| Service | What it checks | Where to look |
-|---|---|---|
-| GitHub Actions [CI](.github/workflows/ci.yml) | Go multi-version test matrix (1.27 / 1.28 / stable), `-race`, `go vet`, `gofmt`, `golangci-lint`, `govulncheck` | [Actions tab](https://github.com/JayceChant/ratchetmatch/actions/workflows/ci.yml) |
-| Codecov | Line-level test coverage, per-commit and per-PR diff coverage | [Coverage detail](https://codecov.io/gh/JayceChant/ratchetmatch) |
-| CodeQL | GitHub-native static security analysis (results in the Security tab) | [Security tab](https://github.com/JayceChant/ratchetmatch/security/code-scanning) |
-| OpenSSF Scorecard | Supply-chain security practices (pinned actions, tokens, branch protection, …) | [Scorecard report](https://scorecard.dev/viewer/?uri=github.com/JayceChant/ratchetmatch) |
-| pkg.go.dev | Official docs build + import check | [Package docs](https://pkg.go.dev/github.com/JayceChant/ratchetmatch) |
-| SonarCloud | Code smells, security hotspots, duplication, coverage gate | [Dashboard](https://sonarcloud.io/summary/new_code?id=JayceChant_ratchetmatch) (requires one-time onboarding, see below) |
-
 ## When to Use
 
 **Suitable**: fixed keyword dictionary, varying target texts — build once with `New`, then query many long texts repeatedly (content filtering, auditing, risk control, and other streaming scan scenarios).
@@ -120,13 +107,3 @@ For the authoritative description of algorithm principles, API contracts, and ac
 ## License
 
 Released under the [MIT License](LICENSE).
-
-## Notes on Third-Party Services
-
-Ready with zero manual setup (triggered by the workflow files in `.github/workflows/`): GitHub Actions (CI matrix, CodeQL, OpenSSF Scorecard), pkg.go.dev (crawls the repo automatically once it is public).
-
-One-time onboarding required (cannot be completed from inside this repository):
-
-1. [SonarCloud](https://sonarcloud.io/): log in with the GitHub account, import `JayceChant/ratchetmatch` (free for public repositories), then add the `SONAR_TOKEN` repository secret and switch Administration → Analysis Method to CI-based analysis (disable Automatic Analysis); optionally install the SonarCloud GitHub App for PR decoration. Project key and organization are already set in `sonar-project.properties`.
-2. [Codecov](https://codecov.io/) (optional): add the `CODECOV_TOKEN` repository secret (uploads now require a token); log in to enable commit statuses / PR checks and coverage history.
-3. [OpenSSF Scorecard](https://scorecard.dev/) (optional, improves the score): enable branch protection on `master` (require PR reviews and status checks) and enable GitHub's dependency graph — the workflow already publishes results automatically.
