@@ -17,8 +17,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 最低支持版本 + 前一版 + 最新稳定版
-        go-version: ["1.27.x", "1.28.x", "stable"]
+        # 最低支持版本 + 最新稳定版（go.mod 声明 go 1.27，低于该版本无法构建；
+        # 当前 stable 即 1.27.x，待 1.28 发布后 stable 自动指向新版本）
+        go-version: ["1.27.x", "stable"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
