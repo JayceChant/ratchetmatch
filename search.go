@@ -133,19 +133,10 @@ type pendHit struct {
 // emit 返回 false 时立即停止。文本指针单调前进、绝不回退。
 //
 // 最左最长（leftmost-longest）语义经「待提交链」实现：候选按结束位置升序到达
-// （同一结束位置的候选按长度降序，来自 outLens），链内起点升序、互不重叠。
-// 候选 cs 与链比较（k 为弹出后基准，chain[:k] 为保留前缀）：
-//   - cs < 链尾起点：候选更左，弹出链尾后继续向链左比较
-//   - cs == 基准起点：取更长（真包含关系一律输出最长），取代被弹出者
-//   - cs >= 基准结束（不重叠）：入链接续，取代被弹出者
-//   - 其余（与基准重叠且起点更晚）：候选必被遮蔽——必死候选无权改变链，
-//     被弹出者原样恢复。若允许其弹链，会出现「为必死候选让位而丢弃本可
-//     提交的命中」的空档（如 {0,000}+"000000000001" 在 [9,10) 的空档），
-//     破坏最左最长语义，且无状态 FindNext 永远无法复现该空档。
-//
-// 提交时机：自动机回到 root 或扫描结束时提交整链。root 时刻的安全性：
-// 若存在「起点 ≤ 当前 pos 而结束于其后」的候选，其前缀仍是词库前缀，
-// 与 state==0 矛盾——故此刻链不会再被任何更左候选覆盖。
+// （同一结束位置的候选按长度降序，来自 outLens），链内起点升序、互不重叠；
+// 逐候选归并规则见 mergeCandidate。提交时机：自动机回到 root 或扫描结束时
+// 提交整链。root 时刻的安全性：若存在「起点 ≤ 当前 pos 而结束于其后」的候选，
+// 其前缀仍是词库前缀，与 state==0 矛盾——故此刻链不会再被任何更左候选覆盖。
 // 如词库 {国,人,中国人} 的文本 "中国人"："国" 先入链，"中国人"(起点更左)
 // 到达时弹出 "国" 与 "人"，最终仅输出 "中国人"；文本 "中国梦" 中 "国"
 // 则在断词回到 root 时结算输出。
@@ -155,24 +146,12 @@ func (m *Matcher) scan(text string, from int, emit func(Match) bool) {
 	var state int32
 	var inline [4]pendHit // 待提交链常规 ≤4 条，栈上内联零分配
 	chain := inline[:0]   // 溢出（连续不重叠命中且长期不回 root）时 append 转堆
-	flush := func() bool {
-		for _, p := range chain {
-			if !emit(Match{
-				Start:   int(p.start),
-				End:     int(p.end),
-				Keyword: text[p.start:p.end],
-			}) {
-				return false
-			}
-		}
-		chain = chain[:0]
-		return true
-	}
 	for pos < n {
 		if state == 0 { // root 循环：先提交链（安全提交点，见上）再跳跃
-			if !flush() {
+			if !flushChain(chain, text, emit) {
 				return
 			}
+			chain = chain[:0]
 			pos = m.skipForward(text, pos)
 			if pos >= n {
 				break
@@ -183,29 +162,58 @@ func (m *Matcher) scan(text string, from int, emit func(Match) bool) {
 		pos += size
 		// 以 pos 结束的候选按长度降序（outLens 降序保证更左者先处理）
 		for _, l := range m.nodes[state].outLens {
-			cs, ce := int32(pos)-l, int32(pos)
-			k := len(chain)
-			for k > 0 && cs < chain[k-1].start {
-				k-- // 候选更左：弹出链尾，继续向链左比较
-			}
-			if k == 0 {
-				chain = append(chain[:k], pendHit{cs, ce}) // 候选最左，取代全部弹出者
-				continue
-			}
-			t := &chain[k-1]
-			switch {
-			case cs >= t.end: // 不重叠：入链，取代被弹出者
-				chain = append(chain[:k], pendHit{cs, ce})
-			case cs == t.start:
-				if ce > t.end { // 同起点取更长（真包含取最长）
-					t.end = ce
-				}
-				chain = chain[:k] // 取代被弹出者
-			default: // 与基准重叠且起点更晚：必死候选，链原样保留（弹出者恢复）
-			}
+			chain = mergeCandidate(chain, int32(pos)-l, int32(pos))
 		}
 	}
-	flush()
+	flushChain(chain, text, emit)
+}
+
+// flushChain 在安全提交点把待提交链整链落袋（链内起点升序即输出序）：
+// 逐条调用 emit，emit 返回 false 时中止并返回 false；全部提交完返回 true。
+// 调用方负责随后清空链（中断时链作废，无需保留）。
+func flushChain(chain []pendHit, text string, emit func(Match) bool) bool {
+	for _, p := range chain {
+		if !emit(Match{
+			Start:   int(p.start),
+			End:     int(p.end),
+			Keyword: text[p.start:p.end],
+		}) {
+			return false
+		}
+	}
+	return true
+}
+
+// mergeCandidate 把候选 [cs,ce) 归并进待提交链，返回新链。候选按结束位置升序
+// 到达（同一结束位置按长度降序），链内起点升序、互不重叠。与链比较（k 为弹出
+// 后基准下标，chain[:k] 为保留前缀）：
+//   - cs < 链尾起点：候选更左，弹出链尾后继续向链左比较；链空则候选取代全部弹出者
+//   - cs == 基准起点：取更长（真包含关系一律输出最长），取代被弹出者
+//   - cs >= 基准结束（不重叠）：入链接续，取代被弹出者
+//   - 其余（与基准重叠且起点更晚）：候选必被遮蔽——必死候选无权改变链，
+//     被弹出者原样恢复。若允许其弹链，会出现「为必死候选让位而丢弃本可
+//     提交的命中」的空档（如 {0,000}+"000000000001" 在 [9,10) 的空档），
+//     破坏最左最长语义，且无状态 FindNext 永远无法复现该空档。
+func mergeCandidate(chain []pendHit, cs, ce int32) []pendHit {
+	k := len(chain)
+	for k > 0 && cs < chain[k-1].start {
+		k-- // 候选更左：弹出链尾，继续向链左比较
+	}
+	if k == 0 {
+		return append(chain[:k], pendHit{cs, ce}) // 候选最左，取代全部弹出者
+	}
+	t := &chain[k-1]
+	switch {
+	case cs >= t.end: // 不重叠：入链，取代被弹出者
+		return append(chain[:k], pendHit{cs, ce})
+	case cs == t.start:
+		if ce > t.end { // 同起点取更长（真包含取最长）
+			t.end = ce
+		}
+		return chain[:k] // 取代被弹出者
+	default: // 与基准重叠且起点更晚：必死候选，链原样保留（弹出者恢复）
+		return chain
+	}
 }
 
 // skipForward 在自动机处于 root 态时应用 Boyer-Moore 坏字符跳跃：
