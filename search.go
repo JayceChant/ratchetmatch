@@ -46,17 +46,6 @@ func (m *Matcher) find(s int32, r rune) int32 {
 	return 0
 }
 
-// FindAll 返回 text 中所有命中（非重叠最左最长：起点最小优先；同一起点前缀关系取最长），
-// 按出现先后（Start 升序）排序；无命中或 text 为空返回 nil。
-func (m *Matcher) FindAll(text string) []Match {
-	var out []Match
-	m.scan(text, 0, func(hit Match) bool {
-		out = append(out, hit)
-		return true
-	})
-	return out
-}
-
 // FindAllOverlapping 返回 text 中全部关键词出现（含互相重叠者），服务词频
 // 统计、关键词提取、索引构建等场景：每个（关键词，出现位置）输出一次，
 // 不做非重叠筛选。输出按 End 升序、同一 End 按关键词长度降序（单遍扫描的
@@ -66,31 +55,26 @@ func (m *Matcher) FindAll(text string) []Match {
 // （大量互为后缀的词）配高频文本时 K 可达 O(n·m)，调用方自行评估规模。
 // 不提供对应的 FindNext 版本：重叠语义与「从 offset 重扫的无状态迭代」
 // 不合，返回一条命中后无法不重扫地枚举与其重叠的更早出现（见 spec Non-Goals）。
-func (m *Matcher) FindAllOverlapping(text string) []Match {
+// opts 可传 WithCaseFold 启用大小写折叠匹配（见 WithCaseFold）。
+func (m *Matcher) FindAllOverlapping(text string, opts ...Option) []Match {
+	fm := m.resolve(opts)
 	var out []Match
 	n := len(text)
 	pos := 0
 	var state int32
 	for pos < n {
 		if state == 0 {
-			pos = m.skipForward(text, pos) // 跳跃安全性只依赖词首字符判据，与输出模式无关
+			pos = fm.skipForward(text, pos) // 跳跃安全性只依赖词首字符判据，与输出模式无关
 			if pos >= n {
 				break
 			}
 		}
 		r, size := utf8.DecodeRuneInString(text[pos:])
-		state = m.step(state, r)
+		state = fm.step(state, r)
 		pos += size
 		// 以 pos 结束的全部关键词（outLens 降序 = 同 End 长度降序）逐条输出；
 		// fail 链的输出继承恰好就是重叠全量信息，无需任何筛选
-		for _, l := range m.nodes[state].outLens {
-			start := pos - int(l)
-			out = append(out, Match{
-				Start:   start,
-				End:     pos,
-				Keyword: text[start:pos],
-			})
-		}
+		out = fm.appendHits(out, text, state, pos)
 	}
 	return out
 }
@@ -99,7 +83,8 @@ func (m *Matcher) FindAllOverlapping(text string) []Match {
 // 适合超长文本按需查找。无状态，可并发调用；调用方用返回的 End 作下次 offset 迭代，
 // 得到的序列与 FindAll 完全一致（首条命中即 FindAll 的第一条）。无命中返回 (Match{}, false)。
 // offset<0 按 0 处理；offset>=len(text) 返回 false；offset 落在多字节字符中间时向后对齐到 rune 边界。
-func (m *Matcher) FindNext(text string, offset int) (Match, bool) {
+// opts 可传 WithCaseFold 启用大小写折叠匹配（见 WithCaseFold）。
+func (m *Matcher) FindNext(text string, offset int, opts ...Option) (Match, bool) {
 	if offset < 0 {
 		offset = 0
 	}
@@ -114,7 +99,7 @@ func (m *Matcher) FindNext(text string, offset int) (Match, bool) {
 		return Match{}, false
 	}
 	var hits []Match // 与 FindAll 同源的待提交链，一次性整链产出
-	m.scan(text, offset, func(hit Match) bool {
+	m.resolve(opts).scan(text, offset, func(hit Match) bool {
 		hits = append(hits, hit)
 		return false // 停止扫描；整链已在本次 emit 中给出
 	})
@@ -161,11 +146,65 @@ func (m *Matcher) scan(text string, from int, emit func(Match) bool) {
 		state = m.step(state, r)
 		pos += size
 		// 以 pos 结束的候选按长度降序（outLens 降序保证更左者先处理）
-		for _, l := range m.nodes[state].outLens {
-			chain = mergeCandidate(chain, int32(pos)-l, int32(pos))
-		}
+		chain = m.mergeHits(chain, text, state, pos)
 	}
 	flushChain(chain, text, emit)
+}
+
+// mergeHits 把以 pos 结束的全部关键词候选归并进待提交链，返回新链。
+// 精确自动机按 outLens 字节长直接回退起点；fold 自动机按关键词 rune 数
+// 回退文本（fold 轨道成员字节宽可不同，见 runeStartBack）。
+func (m *Matcher) mergeHits(chain []pendHit, text string, state int32, pos int) []pendHit {
+	outs := &m.nodes[state]
+	if !m.folded { // 精确自动机：字节长即文本消耗
+		for _, l := range outs.outLens {
+			chain = mergeCandidate(chain, int32(pos)-l, int32(pos))
+		}
+		return chain
+	}
+	for i := range outs.outLens {
+		start := runeStartBack(text, pos, int(outs.outRunes[i]))
+		chain = mergeCandidate(chain, int32(start), int32(pos))
+	}
+	return chain
+}
+
+// appendHits 把以 pos 结束的全部关键词命中追加进 out（FindAllOverlapping
+// 全量输出路径，顺序 = outLens 降序）。fold 语义同 mergeHits。
+func (m *Matcher) appendHits(out []Match, text string, state int32, pos int) []Match {
+	outs := &m.nodes[state]
+	if !m.folded {
+		for _, l := range outs.outLens {
+			out = append(out, Match{
+				Start:   pos - int(l),
+				End:     pos,
+				Keyword: text[pos-int(l) : pos],
+			})
+		}
+		return out
+	}
+	for i := range outs.outLens {
+		start := runeStartBack(text, pos, int(outs.outRunes[i]))
+		out = append(out, Match{
+			Start:   start,
+			End:     pos,
+			Keyword: text[start:pos],
+		})
+	}
+	return out
+}
+
+// runeStartBack 从 pos（rune 边界）向前回退 n 个 rune，返回起点字节下标。
+// 前提：pos 之前至少存在 n 个完整 rune（自动机不变量：命中关键词的 rune 数
+// 不超过扫描已消耗的 rune 数）。
+func runeStartBack(text string, pos, n int) int {
+	for range n {
+		pos--
+		for !utf8.RuneStart(text[pos]) {
+			pos--
+		}
+	}
+	return pos
 }
 
 // flushChain 在安全提交点把待提交链整链落袋（链内起点升序即输出序）：

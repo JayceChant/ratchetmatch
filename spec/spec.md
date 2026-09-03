@@ -4,16 +4,33 @@
 
 给定词库（多个关键词），对每条输入的长文本单遍扫描，返回全部命中关键词及位置，采用非重叠最左最长语义。现有通用实现未针对中文 rune 特点优化，且缺少明确的命中优先级语义，本库补此空白。Go 1.27、零第三方依赖。
 
-公共 API：`New` / `FindAll` / `FindAllOverlapping` / `FindNext`（签名与契约见各 Requirement）。**本 spec 为 API 契约与匹配语义的权威描述，修改行为须先改本文件。**
+公共 API：`New` / `FindAll` / `FindAllOverlapping` / `FindNext`（签名与契约见各 Requirement）。Find 系列均带变参 `opts ...Option`（不传 = 默认行为，源兼容），当前唯一选项 `WithCaseFold` 启用大小写折叠查询（见对应 Requirement）。**本 spec 为 API 契约与匹配语义的权威描述，修改行为须先改本文件。**
 
 ## Non-Goals
 
-- 大小写折叠、全半角归一化、正则、编辑距离匹配
+- 全半角归一化、正则、编辑距离匹配（大小写折叠已支持，见 caseFold Requirement；多 rune 展开式全折叠如 ß→ss 不支持，fold 语义为逐 rune SimpleFold 轨道等价）
 - 流式（分块）输入接口；关键词动态增删（构建后不可变）
 - 重叠模式的按需查找（`FindNextOverlapping`）：重叠语义与「从 offset 重扫的无状态迭代」不兼容——返回最长的出现后以 End 推进必然漏掉其内部更早起点的出现（如 国[3,6)）
 - 基于 rune 下标的位置/长度 API（决策依据见「偏移计量单位」需求）
 
 ## Requirements
+
+### Requirement: caseFold 查询（WithCaseFold 变参选项）
+
+Find 系列接受变参 `opts ...Option`，`WithCaseFold() Option` 使本次查询按 Unicode SimpleFold 轨道折叠语义匹配（`strings.EqualFold` 等价：文本 rune 与关键词 rune fold 相等即匹配）。默认变参为空 = 精确匹配，行为与本 Requirement 引入前完全一致：
+
+- **折叠自动机构建期生成、查询期惰性构建**：`New` 只建精确自动机；首次 fold 查询时在同一 `Matcher` 内同步构建折叠自动机（一次性、此后只读，`sync.Once` 保证并发安全，其它 goroutine 等待构建完成），可并发调用
+- 构建语义：关键词按 rune 序插入，fold 轨道等价的边复用同一目标节点（fold-equal 兄弟分支天然合一，outLens 为折叠等价关键词的并集）；构建期失败指针按折叠匹配计算；`rootNext`/`byteFilter`/CSR 边 key 均展开为各 rune 的全部 SimpleFold 轨道成员（轨道互不相交，每轨道成员数 ≤4，词库规模膨胀为常数倍）——查询热路径（step/find/skipForward 逻辑）与精确模式完全共用，代码零分支
+- 匹配语义（FindAll / FindAllOverlapping / FindNext）与精确模式逐条对应：非重叠最左最长、End 升序全量、首命中即停，均以折叠等价替换精确相等；**同一 Matcher 的 fold 查询输出 ≡ 先把词库全部折叠归一去重、再按同等最左最长语义对折叠后文本扫描的结果**（等价 oracle 见测试）
+- **命中区间按文本侧实际消耗提取**：fold 轨道成员 UTF-8 宽度可不同（如 K U+212A 3 字节 vs k 1 字节），outLens 的字节长不可直接回退起点；fold 自动机的输出改存（关键词 rune 数, 关键词折叠轨道代表字节长），命中时按 rune 数从 End 向前走 rune 边界提取 Start，`Match.Keyword = text[Start:End]`（文本原样切片，非关键词原件——同一关键词可折叠匹配出多种大小写形态）
+- fold 匹配按逐 rune SimpleFold 比较：文本非法字节按 RuneError 处理（不在任何折叠轨道，等同精确模式）；文本合法 rune 折叠到 RuneError 不可能（RuneError 无折叠轨道伙伴）；SimpleFold 不做多 rune 展开（ß→ss）——关键词含 ß 时只匹配含 ß 的文本
+- fold 模式下 BM 跳跃安全性：折叠自动机首字符集已含全部轨道成员，root 态跳跃判据（起始 rune 必在首字符集）不变；未展开轨道前的 rune 不会成为合法起始
+
+#### Scenario: fold 查询
+- **WHEN** `m, _ := New([]string{"hello","世界"}); m.FindAll("Hello, WORLD! 世界", WithCaseFold())` **THEN** 命中 `Hello`(0,5) 与 `世界`(14,20)；不带选项调用同词库同文本仅命中 `世界`
+- **WHEN** 词库 {"Stop","stop"}，文本 "SToP sTop"（fold 查询）**THEN** 两处均命中（精确查询漏报其一——同节点不可能走两条分支，构建期合一即修复）
+- **WHEN** 词库 {"K"}（U+212A 开尔文度），文本 "k K"（fold 查询）**THEN** 命中 k(0,1) 与 K(2,5)：区间按文本侧宽度提取，Keyword 为文本切片
+- **WHEN** 并发 8 goroutine 混合 fold / 精确查询同一 Matcher **THEN** `-race` 通过，fold 首次构建仅发生一次
 
 ### Requirement: 词库构建与校验
 
@@ -111,7 +128,7 @@
 
 ### Requirement: FindAllOverlapping 重叠全量返回
 
-系统 SHALL 提供 `FindAllOverlapping(text string) []Match`，返回全部关键词出现（含互相重叠者），服务词频统计、索引构建：
+系统 SHALL 提供 `FindAllOverlapping(text string, opts ...Option) []Match`，返回全部关键词出现（含互相重叠者），服务词频统计、索引构建：
 
 - 每个（关键词，出现位置）对输出一次；不做非重叠筛选（outLens 本就携带以每个结束位置结尾的全部关键词，fail 链输出继承即全量信息）
 - 输出按 **End 升序**、同一 End 按**长度降序**（单遍扫描的天然产出序，注意与 `FindAll` 的 Start 升序不同序）
@@ -125,7 +142,7 @@
 
 ### Requirement: FindNext 按需查找（超长文本友好）
 
-系统 SHALL 提供 `FindNext(text string, offset int) (Match, bool)`（comma-ok 形式；裸零值 Match 无法与「文本起点命中」区分，`*Match` nil 语义含混，均被否决）：
+系统 SHALL 提供 `FindNext(text string, offset int, opts ...Option) (Match, bool)`（comma-ok 形式；裸零值 Match 无法与「文本起点命中」区分，`*Match` nil 语义含混，均被否决）：
 
 - **无状态**：Matcher 不保存查询进度，可并发调用；调用方以返回 Match 的 End 作为下次 offset 实现按需迭代
 - 从 offset（字节偏移）开始扫描，返回**第一个**满足最左最长语义的命中，找到即终止扫描；自动机从 root 开始（匹配不跨越 offset 向左延伸）
@@ -139,7 +156,7 @@
 
 ### Requirement: 并发安全
 
-`Matcher` 构建完成后 SHALL 为只读（无查询期可变状态），`FindAll` / `FindNext` 可无锁并发调用；`go test -race` 下并发测试通过。
+`Matcher` 构建完成后 SHALL 为只读（无查询期可变状态），`FindAll` / `FindNext` 可无锁并发调用；`go test -race` 下并发测试通过。fold 首次查询触发的折叠自动机惰性构建由 `sync.Once` 串行化（并发 fold 调用等待构建完成后共同使用只读结果），不破坏本约束。
 
 ### Requirement: 质量与工程化
 
