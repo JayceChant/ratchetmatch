@@ -1,7 +1,9 @@
 // 本文件为两套自动机的构建管线（公共接口见 matcher.go，查询引擎见
 // engine.go，选项见 option.go）：精确构建（trie 插入 → BFS 失败指针 → CSR
 // 展平 → BM 字节过滤器）与折叠构建（SimpleFold 轨道代表合一 + 轨道展开，
-// 见文件末段）。两套管线均直接从关键词列表构建，构建后即定型为对应模式。
+// 见文件末段）。两套管线均直接从关键词列表构建，构建后即定型为对应模式；
+// 命名与 engine.go 的 exact*/fold* 系列保持对偶（exactBuilder/trieNode ↔
+// foldBuilder/foldBuilderNode）。
 package ratchetmatch
 
 import (
@@ -28,38 +30,38 @@ func dedupe(keywords []string) []string {
 // 精确自动机构建
 // ---------------------------------------------------------------------------
 
-// builder 聚集精确构建期状态：root 即 nodes[0]（下标 0 = root，其余节点从 1 起，
-// 与成品 nodes 下标完全一致），root 的 children map 成品直接复用为 rootNext，
-// 兼任跳跃判断集。
+// exactBuilder 聚集精确构建期状态：root 即 nodes[0]（下标 0 = root，其余节点
+// 从 1 起，与成品 nodes 下标完全一致），root 的 children map 成品直接复用为
+// rootNext，兼任跳跃判断集。命名与 foldBuilder 对偶（见文件末段）。
 // 注意：insert 阶段会 append 扩容 nodes，底层数组可能重新分配，故不可跨
 // append 缓存 &b.nodes[i]，一律按下标访问（BFS/flatten 阶段不再 append，
 // 局部指针安全）。
-type builder struct {
-	nodes []trieNode
+type exactBuilder struct {
+	nodes []exactBuilderNode
 }
 
-// trieNode 构建期节点：children 即自有 trie 边。
-type trieNode struct {
+// exactBuilderNode 精确构建期节点：children 即自有 trie 边。
+type exactBuilderNode struct {
 	children map[rune]int32
 	fail     int32
 	termLen  int32
 	outLens  []int32
 }
 
-// newBuilder 创建只含 root（nodes[0]）的 builder。
-func newBuilder(capHint int) *builder {
-	b := &builder{nodes: make([]trieNode, 1, capHint+1)}
+// newExactBuilder 创建只含 root（nodes[0]）的精确 builder。
+func newExactBuilder(capHint int) *exactBuilder {
+	b := &exactBuilder{nodes: make([]exactBuilderNode, 1, capHint+1)}
 	b.nodes[0].children = make(map[rune]int32)
 	return b
 }
 
 // insert 从 cur 经 rune r 下行，孩子不存在则新建（cur==0 即 root，同一路径）。
-func (b *builder) insert(cur int32, r rune) int32 {
+func (b *exactBuilder) insert(cur int32, r rune) int32 {
 	if t, ok := b.nodes[cur].children[r]; ok {
 		return t
 	}
 	t := int32(len(b.nodes))
-	b.nodes = append(b.nodes, trieNode{children: make(map[rune]int32)})
+	b.nodes = append(b.nodes, exactBuilderNode{children: make(map[rune]int32)})
 	b.nodes[cur].children[r] = t // append 可能扩容，须重新按 cur 下标访问
 	return t
 }
@@ -68,7 +70,7 @@ func (b *builder) insert(cur int32, r rune) int32 {
 // 先查 s 的自有边，未命中沿 fail 链逐级回退重试；到 root（nodes[0]）查其
 // 孩子表，仍未含则返回 0（留在 root）。构建期失败指针计算与查询期 step 同一语义。
 // BFS 约束保证 s 的 fail 指向更浅节点、其 fail 已算好，回退安全。
-func (b *builder) gotoWithFail(s int32, r rune) int32 {
+func (b *exactBuilder) gotoWithFail(s int32, r rune) int32 {
 	for {
 		if t, ok := b.nodes[s].children[r]; ok {
 			return t
@@ -82,7 +84,7 @@ func (b *builder) gotoWithFail(s int32, r rune) int32 {
 
 // buildAutomaton 用 BFS 计算失败指针与输出信息。
 // BFS 按层处理，处理某节点时其失败指针指向的更浅节点必已算好。
-func (b *builder) buildAutomaton() {
+func (b *exactBuilder) buildAutomaton() {
 	queue := make([]int32, 0, len(b.nodes))
 	for _, c := range b.nodes[0].children { // root（nodes[0]）的孩子 fail 一律为 root
 		b.nodes[c].fail = 0
@@ -113,7 +115,7 @@ func (b *builder) buildAutomaton() {
 // flatten 把 trie 边一次性展平为全局 CSR 有序数组：每个非 root 节点收集
 // 孩子键、排序后追加进 keys/vals，记录 base/count。root 的表不进 CSR
 // （成品以 map 形式直接复用，兼任跳跃判断集）。
-func (b *builder) flatten() ([]exactNode, []rune, []int32) {
+func (b *exactBuilder) flatten() ([]exactNode, []rune, []int32) {
 	total := 0
 	for i := range b.nodes {
 		if i > 0 {
@@ -160,7 +162,7 @@ func setFilterBit(bf *[32]byte, r rune) {
 // buildExact 从去重后的关键词列表构建精确自动机（New 默认模式的实现体，
 // 见 matcher.go）。
 func buildExact(keywords []string) *exactMatcher {
-	b := newBuilder(len(keywords))
+	b := newExactBuilder(len(keywords))
 	em := &exactMatcher{}
 	for _, kw := range keywords {
 		cur := int32(0)
