@@ -116,6 +116,14 @@ fm.CaseFold()                    // true
 
 Case variants in the dictionary are merged, so nothing is missed; `Match.Keyword` is the original text slice (e.g., `"Hello"`), while `Start`/`End` still slice the text directly. To use both modes on one dictionary, build two `Matcher` instances.
 
+**Performance note**: the fold automaton pre-expands fold orbits into the transition tables at build time, so the query hot path performs zero per-rune fold comparisons. Measured overhead (`bench_fold_test.go`; the ASCII dictionary whose orbit-expanded keys are ~2x is the worst case, 100 keywords × ~100k-rune English text):
+
+- **Query**: roughly at parity with exact mode (`FindAll` on the same dictionary and text: fold 3.05 ms vs exact 3.04 ms; Chinese-dictionary cases all within ±5% noise) — orbit-expanded keys live in the same CSR binary-search path, and match extraction's rune-level backoff (`runeStartBack`) only walks runes at hit positions.
+- **Build**: slightly more expensive than exact (`New` 100 keywords: ~1.4x time, +20% memory; shrinks toward ~1.1x as the dictionary grows, since orbit expansion is amortized across dictionary dedup). Fold orbit resolution (SimpleFold rings) and expanded-key writing are one-time costs at `New`.
+- **Semantics bonus**: on case-mixed text, fold finds all case variants that exact mode misses — in the ASCII benchmark fold reports ~1000 extra hits (uppercased keywords) at no measurable scan-time cost.
+
+Rule of thumb: enable `WithCaseFold()` whenever case-insensitivity is desired — the query-side cost is negligible; only builds of very large dictionaries (>10k keywords) may notice the construction overhead.
+
 For the authoritative description of algorithm principles, API contracts, and acceptance scenarios, see `spec/spec.md`.
 
 ## License

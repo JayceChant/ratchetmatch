@@ -54,3 +54,8 @@
   - 文件重排同步：matcher.go（接口+New）/ option.go（Option/WithCaseFold）/ engine.go（节点+引擎）/ build.go（双构建管线）。
   - 验证：全链路门槛 + example 模块通过；30s fuzz 全过；基准无回退（接口分发的 itab 开销相对扫描本身可忽略，FindAllMixed 1.02ms / 11 allocs 持平）。
 - 2026-09-03 SonarCloud 覆盖率排除 example/：example 目录并入仓库（Task 18）后，`sonar.sources=.` 会把示例代码计入覆盖率分母，而 coverage.txt 只含根模块（example 是独立 module，`go test ./...` 不编译它），SonarCloud 面板覆盖率因此被拉低；Codecov 不受影响（只消费 coverage.txt）。修正：sonar-project.properties 的 `sonar.exclusions` 追加 `**/example/**`。示例程序的验证靠运行核对而非单测覆盖，不参与覆盖率统计是预期行为。
+- [x] Task 22: case fold 测试强度审计 + exact 零影响验证 + fold 性能基准（用户要求）：
+  - **测试强度**：语句覆盖率 100%（-race + coverprofile，仅 isInternal 空方法 0%），但语句覆盖 ≠ 分支覆盖——审计发现 fold 从未专项测试 CSR 二分分支（段宽 >16）与 runeStartBack 跨混合宽度 rune 回退；新增 TestCaseFoldBinaryBranch（17 个 P? 词：轨道展开后 root 为 P/p 两键同目标、P 节点段宽 35=17×2+1（K 为 p 轨道第三成员））与 TestCaseFoldRuneStartBackMixed（k/K/U+212A 轨道 1B↔3B + ÿ/Ÿ 轨道 1B↔2B，文本窄宽交错、同 rune 数不同字节）。两测试首版均失败，根因均为测试构造错误（未考虑轨道展开；误以为全角Ａ与 ASCII a 同轨道——SimpleFold 不跨全半角），实现无缺陷。
+  - **exact 零影响**：全量测试 + -race 通过、覆盖率 100%；基准 FindAllMixed 0.98ms/10 allocs（历史 1.02ms/10-11）、FindNextFirst 100µs/2 allocs——密封接口定型后 exact 路径无行为/性能变化。
+  - **fold 性能**（新增 bench_fold_test.go，TestFoldBenchEquiv 锁定「同词库同文本命中一致」的对照口径）：构建 fold/exact = 1.42x（100 词）/1.19x（1k）/1.06x（10k），内存 +24%→+2%（轨道解析与展开键写入为一次性成本，随词库增大摊薄）；查询：纯中文词库（无轨道展开）与 exact 持平（±5% 噪声内）；ASCII 词库（轨道展开键数 ~2x，最坏情况）同文本 fold 3.05ms vs exact 3.04ms 持平，且 fold 多命中约 1000 条 exact 漏报（首字母大写词）——查询侧开销可忽略，构建侧小幅可测。
+  - README 双语「大小写折叠」小节增补性能提示（查询持平 / 构建 1.4x→1.1x 随词库摊薄 / 语义收益；建议需要大小写不敏感即开 WithCaseFold）。

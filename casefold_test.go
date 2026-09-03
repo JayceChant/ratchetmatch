@@ -349,6 +349,74 @@ func TestCaseFoldAdjacentOverlapping(t *testing.T) {
 	}
 }
 
+// TestCaseFoldBinaryBranch fold 自动机的 find 二分分支（段宽 >16）专项：
+// 折叠 CSR 键为轨道展开产物（段内可达精确版数倍宽），须在 >16 宽度下验证
+// 段内仍严格升序、二分查找转移正确。
+func TestCaseFoldBinaryBranch(t *testing.T) {
+	// 17 个折叠互不等价的首字母（跨轨道），次字符各不相同：
+	// root 无折叠合一、P 节点 17 个折叠不等价孩子 → CSR 段宽 17 > 16。
+	prefix := "P"
+	suffixes := "ABCDEFGHIJKLMNOPQ"
+	kws := make([]string, 0, len(suffixes))
+	for _, s := range suffixes {
+		kws = append(kws, prefix+string(s))
+	}
+	m := mustNewFold(t, kws)
+	em := m.(*foldMatcher)
+	// 前置白盒断言：P 节点段确实宽于 16。17 个 ASCII 字母折叠互不等价，
+	// 轨道展开后 root 为 P/p 两键同目标、P 节点段宽 17×2+1(K 为 p 轨道第三成员)=35。
+	pNode := int(em.rootNext['P'])
+	if em.rootNext['p'] != em.rootNext['P'] || em.nodes[pNode].count <= 16 {
+		t.Fatalf("前置条件不满足：root 键 P/p 不同目标或 P 节点 count=%d（需 >16）",
+			em.nodes[pNode].count)
+	}
+	// 每个词独立命中（每次转移过二分分支）
+	for _, s := range suffixes {
+		kw := prefix + string(s)
+		got := m.FindAll(kw)
+		if len(got) != 1 || got[0].Keyword != kw {
+			t.Errorf("FindAll(%q) = %v, 期望 1 条 %q", kw, got, kw)
+		}
+	}
+	// 混排大小写变体再过二分分支（文本侧与词侧轨道成员不同）
+	mixed := "pA,pB,Pc,pD,Pe,Pf,PG,Ph,Pi,Pj,Pk,Pl,Pm,Pn,Po,Pp,Pq"
+	got := m.FindAll(mixed)
+	if len(got) != 17 {
+		t.Errorf("混排扫描命中 %d 条, 期望 17 条: %v", len(got), got)
+	}
+}
+
+// TestCaseFoldRuneStartBackMixed 锁定宽度差回退（runeStartBack）跨混合宽度
+// rune 的正确性：同轨道成员字节宽可不同（k 1B ↔ U+212A 3B；y 1B ↔ ÿ 2B），
+// 命中起点必须按文本侧实际宽度前退。注意全角Ａ（U+FF21）与 ASCII a 是不同
+// 轨道（SimpleFold 不跨全半角），不匹配是正确行为。
+func TestCaseFoldRuneStartBackMixed(t *testing.T) {
+	const kelvin = "\u212A" // 3B，与 k(1B)/K(1B) 同轨道
+	// 关键词规范路径 aKbKc（9B/5 runes），文本窄宽交错（A 1B / k 1B / b 1B /
+	// K 3B / c 1B = 7B/5 runes）：同 rune 数不同字节，回退按文本侧宽度执行。
+	m := mustNewFold(t, []string{"a" + kelvin + "b" + kelvin + "c"})
+	text := "A" + "k" + "b" + kelvin + "c"
+	got := m.FindAll(text)
+	want := []Match{{0, 7, text}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("混合宽度回退不符\ngot:  %v\nwant: %v", got, want)
+	}
+	// 嵌入噪声后仍正确（前退跨越 3B 宽 rune 与噪声）
+	text2 := "x" + text + "y"
+	got2 := m.FindAll(text2)
+	want2 := []Match{{1, 8, text}}
+	if !slices.Equal(got2, want2) {
+		t.Fatalf("带噪声混合宽度命中不符\ngot:  %v\nwant: %v", got2, want2)
+	}
+	// 2B 轨道（y/ÿ/Ÿ）：同 rune 数同 span，Keyword 为文本原样切片
+	m2 := mustNewFold(t, []string{"aÿb"})
+	got3 := m2.FindAll("aŸb")
+	want3 := []Match{{0, 4, "aŸb"}}
+	if !slices.Equal(got3, want3) {
+		t.Fatalf("2B 轨道命中不符\ngot:  %v\nwant: %v", got3, want3)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 模式判别与边界
 // ---------------------------------------------------------------------------
