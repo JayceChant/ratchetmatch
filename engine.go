@@ -1,7 +1,7 @@
-// 本文件为两套自动机（exactMatcher / foldMatcher）共用的泛型扫描引擎：
-// nodeAPI 约束接口 + machine[N] 转移与扫描 + 最左最长待提交链。节点类型
-// （exactNode/foldNode）与其构建管线分见本文件与 build.go；公共 API 见
-// matcher.go，选项见 option.go。
+// 本文件为两套自动机实现的查询期核心：nodeAPI 约束接口、exactNode/foldNode
+// 节点、machine[N] 泛型扫描引擎与最左最长待提交链。两套自动机对外形态
+// （实现导出的 Matcher 接口）见本文件末段；构建管线见 build.go，公共 API
+// 见 matcher.go，选项见 option.go。
 package ratchetmatch
 
 import "unicode/utf8"
@@ -57,7 +57,7 @@ func (n foldNode) start(text string, pos, i int) int {
 	return runeStartBack(text, pos, int(n.outRunes[i]))
 }
 
-// machine 是精确/折叠两套自动机共用的查询引擎。转移表为全局 CSR 数组
+// machine 是两套自动机共用的泛型扫描引擎。转移表为全局 CSR 数组
 // （transKeys/transVals 按节点 base/count 区间分段），节点仅存自有 trie 边
 // （键升序）：查询期每处理一个 rune 先在当前状态段内查找，未命中沿失败指针
 // 回退重试（摊还 O(1)），不做 DFA 全量解析；自动机处于 root 态时应用
@@ -71,11 +71,35 @@ type machine[N nodeAPI] struct {
 	byteFilter [32]byte       // 词首 rune 的 UTF-8 首字节 256 位位图（见 skipForward）
 }
 
-// exactMatcher 精确自动机；foldMatcher 折叠自动机（SimpleFold 轨道语义）。
-type (
-	exactMatcher = machine[exactNode]
-	foldMatcher  = machine[foldNode]
-)
+// ---------------------------------------------------------------------------
+// 导出接口的两套实现：类型即模式（exact / fold），构建即定型，无运行时分支。
+// ---------------------------------------------------------------------------
+
+// exactMatcher 是大小写敏感（精确）自动机，实现导出的 Matcher 接口；
+// 由 New 不带选项时返回（见 buildExact）。
+type exactMatcher struct {
+	machine[exactNode]
+}
+
+// CaseFold 报告自动机是否为折叠模式；exactMatcher 恒为 false。
+func (*exactMatcher) CaseFold() bool { return false }
+
+// isInternal 实现 Matcher 接口的密封方法：仅本包可提供实现，保障接口演进自由。
+func (*exactMatcher) isInternal() {}
+
+// internal 实现导出接口的密封方法（见 Matcher）。
+
+// foldMatcher 是大小写折叠自动机（SimpleFold 轨道语义，见 WithCaseFold），
+// 实现导出的 Matcher 接口；由 New(WithCaseFold()) 返回（见 buildFold）。
+type foldMatcher struct {
+	machine[foldNode]
+}
+
+// CaseFold 报告自动机是否为折叠模式；foldMatcher 恒为 true。
+func (*foldMatcher) CaseFold() bool { return true }
+
+// isInternal 实现 Matcher 接口的密封方法：仅本包可提供实现，保障接口演进自由。
+func (*foldMatcher) isInternal() {}
 
 // step 返回状态 s 在 rune r 上的转移目标；未含则沿失败指针回退重试，
 // 回退到 root 仍未含则留在 root（返回 0）。摊还 O(1)：中文词库的节点
@@ -211,9 +235,9 @@ func (m *machine[N]) appendAll(out []Match, text string, s int32, pos int) []Mat
 	return out
 }
 
-// findAll 返回 text 中所有命中（非重叠最左最长），按 Start 升序排序；
+// FindAll 返回 text 中所有命中（非重叠最左最长），按 Start 升序排序；
 // 无命中或 text 为空返回 nil。
-func (m *machine[N]) findAll(text string) []Match {
+func (m *machine[N]) FindAll(text string) []Match {
 	var out []Match
 	m.scan(text, 0, func(hit Match) bool {
 		out = append(out, hit)
@@ -222,10 +246,10 @@ func (m *machine[N]) findAll(text string) []Match {
 	return out
 }
 
-// findAllOverlapping 返回 text 中全部关键词出现（含互相重叠者）：每个
+// FindAllOverlapping 返回 text 中全部关键词出现（含互相重叠者）：每个
 // （关键词，出现位置）输出一次，不做非重叠筛选。输出按 End 升序、同一 End
 // 按长度降序（单遍扫描的天然产出序）。无命中或 text 为空返回 nil。
-func (m *machine[N]) findAllOverlapping(text string) []Match {
+func (m *machine[N]) FindAllOverlapping(text string) []Match {
 	var out []Match
 	n := len(text)
 	pos := 0
@@ -247,10 +271,10 @@ func (m *machine[N]) findAllOverlapping(text string) []Match {
 	return out
 }
 
-// findNext 从 offset（字节偏移）开始查找第一个命中，找到即终止扫描；
+// FindNext 从 offset（字节偏移）开始查找第一个命中，找到即终止扫描；
 // 无命中返回 (Match{}, false)。offset<0 按 0 处理；offset>=len(text) 返回
 // false；offset 落在多字节字符中间时向后对齐到 rune 边界。
-func (m *machine[N]) findNext(text string, offset int) (Match, bool) {
+func (m *machine[N]) FindNext(text string, offset int) (Match, bool) {
 	if offset < 0 {
 		offset = 0
 	}
@@ -264,7 +288,7 @@ func (m *machine[N]) findNext(text string, offset int) (Match, bool) {
 	if offset >= n {
 		return Match{}, false
 	}
-	var hits []Match // 与 findAll 同源的待提交链，一次性整链产出
+	var hits []Match // 与 FindAll 同源的待提交链，一次性整链产出
 	m.scan(text, offset, func(hit Match) bool {
 		hits = append(hits, hit)
 		return false // 停止扫描；整链已在本次 emit 中给出

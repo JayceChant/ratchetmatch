@@ -1,8 +1,8 @@
-// 本文件为 WithCaseFold 大小写折叠查询的专项测试（package ratchetmatch）：
-//   - 折叠轨道工具与 trie 关键词还原的白盒校验；
-//   - 语义表用例（合一、宽度差、无展开式折叠、中文不受影响）；
+// 本文件为大小写折叠匹配的专项测试（package ratchetmatch）：
+//   - 折叠轨道工具的白盒校验；
+//   - 语义表用例（合一、宽度差、无展开式折叠、中文不受影响）与模式判别；
 //   - 随机对照：fold 三 API 与「逐位置 strings.EqualFold 枚举」oracle 一致；
-//   - 惰性构建的并发安全与一次性；默认（精确）路径不受影响。
+//   - 两套实现（exact / fold）并发查询的稳定性（数据竞争由 -race 检出）。
 package ratchetmatch
 
 import (
@@ -14,12 +14,25 @@ import (
 	"unicode/utf8"
 )
 
+// mustNewFold 构建折叠模式 Matcher，意外失败时立即终止当前测试。
+func mustNewFold(t *testing.T, keywords []string) Matcher {
+	t.Helper()
+	m, err := New(keywords, WithCaseFold())
+	if err != nil {
+		t.Fatalf("New(%q, WithCaseFold) 意外失败: %v", keywords, err)
+	}
+	if !m.CaseFold() {
+		t.Fatalf("New(WithCaseFold) 应返回折叠模式: %T", m)
+	}
+	return m
+}
+
 // ---------------------------------------------------------------------------
-// 白盒：折叠轨道工具与关键词还原
+// 白盒：折叠轨道工具
 // ---------------------------------------------------------------------------
 
 func TestFoldKeyOrbit(t *testing.T) {
-	// ASCII 单成员轨道外的典型轨道：2 成员 / 3 成员 / 含全角 / 含兼容字符
+	// ASCII 单成员轨道外的典型轨道：2 成员 / 3 成员 / 含兼容字符
 	cases := []struct {
 		rs    []rune // 同一折叠轨道的全部成员（人工确认）
 		width int    // 成员数
@@ -61,28 +74,6 @@ func TestFoldKeyOrbit(t *testing.T) {
 	}
 }
 
-// TestTrieKeywordsRestore 验证从成品自动机无损还原词库（buildFold 的输入）：
-// 还原集合必须与 New 的输入集合（去重后）完全一致。
-func TestTrieKeywordsRestore(t *testing.T) {
-	pools := [][]string{
-		{"中国", "中国人", "国", "人"},
-		{"stop", "STOP", "Stop", "ss", "sS"},
-		{"K", "k", "\u212A", "世界", "world"},
-		{"a", "ab", "abc", "abcd"}, // 前缀链：每个前缀都是词
-		{"上海", "海口"},               // 后缀交叉
-		{"\u212A"},                 // 单词库
-	}
-	for _, pool := range pools {
-		m := mustNew(t, pool)
-		got := trieKeywords(m.exact)
-		slices.Sort(got)
-		want := slices.Compact(slices.Sorted(slices.Values(pool)))
-		if !slices.Equal(got, want) {
-			t.Errorf("trieKeywords 还原不符\ngot  %v\nwant %v", got, want)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // 语义表用例
 // ---------------------------------------------------------------------------
@@ -97,8 +88,8 @@ func TestCaseFoldSemantics(t *testing.T) {
 		name      string
 		keywords  []string
 		text      string
-		wantFold  []Match // FindAll(WithCaseFold)
-		wantExact []Match // FindAll()（默认不变）
+		wantFold  []Match // 折叠 Matcher 的 FindAll
+		wantExact []Match // 精确 Matcher 的 FindAll
 	}{
 		{
 			name:      "ASCII 大小写",
@@ -115,7 +106,7 @@ func TestCaseFoldSemantics(t *testing.T) {
 			wantExact: []Match{},
 		},
 		{
-			name:      "折叠变体关键词只出一条（outLens 去重）",
+			name:      "折叠变体关键词只出一条（outRunes 去重）",
 			keywords:  []string{"ss", "sS", "Ss", "SS"},
 			text:      "Ss",
 			wantFold:  []Match{{0, 2, "Ss"}},
@@ -147,7 +138,7 @@ func TestCaseFoldSemantics(t *testing.T) {
 			keywords:  []string{grLower},
 			text:      grUpper + " " + grLower + " " + grFinal,
 			wantFold:  []Match{{0, 12, grUpper}, {13, 25, grLower}, {26, 38, grFinal}},
-			wantExact: []Match{{13, 25, grLower}},
+			wantExact: []Match{{13, 25, grLower}}, // 精确模式：grFinal ≠ grLower 不命中
 		},
 		{
 			name:      "中文不受折叠影响",
@@ -159,15 +150,19 @@ func TestCaseFoldSemantics(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			m := mustNew(t, tc.keywords)
-			got := m.FindAll(tc.text, WithCaseFold())
-			assertMatches(t, tc.text, "fold", got, tc.wantFold)
-			gotExact := m.FindAll(tc.text)
-			assertMatches(t, tc.text, "exact", gotExact, tc.wantExact)
-			// fold 惰性构建不影响精确行为
-			if gotExact2 := m.FindAll(tc.text); !slices.Equal(gotExact, gotExact2) {
-				t.Error("fold 查询后精确结果漂移")
+			fm := mustNewFold(t, tc.keywords)
+			if !fm.CaseFold() {
+				t.Fatal("折叠 Matcher 的 CaseFold 应为 true")
 			}
+			got := fm.FindAll(tc.text)
+			assertMatches(t, tc.text, "fold", got, tc.wantFold)
+
+			em := mustNew(t, tc.keywords)
+			if em.CaseFold() {
+				t.Fatal("精确 Matcher 的 CaseFold 应为 false")
+			}
+			gotExact := em.FindAll(tc.text)
+			assertMatches(t, tc.text, "exact", gotExact, tc.wantExact)
 		})
 	}
 }
@@ -178,7 +173,7 @@ func TestCaseFoldSemantics(t *testing.T) {
 
 // foldOracleAll 枚举 text 中全部折叠匹配出现（每个 rune 对齐的 (起点, 关键词)
 // 组合一一对照 strings.EqualFold），同区间去重后按 End 升序、同 End 关键词
-// 长度降序输出——即 FindAllOverlapping(WithCaseFold) 的朴素 oracle。
+// 长度降序输出——即 FindAllOverlapping（折叠）的朴素 oracle。
 func foldOracleAll(kws []string, text string) []Match {
 	// 关键词按 rune 数分桶，逐结束位置只检查等 rune 数的关键词
 	byLen := make(map[int][][]rune)
@@ -227,7 +222,7 @@ func foldOracleAll(kws []string, text string) []Match {
 }
 
 // greedyLeftmostLongest 从全量出现（按 Start 升序、长度降序预排序）贪心
-// 选择非重叠最左最长序列——FindAll(WithCaseFold) 的朴素 oracle。
+// 选择非重叠最左最长序列——FindAll（折叠）的朴素 oracle。
 func greedyLeftmostLongest(ovl []Match) []Match {
 	sorted := slices.Clone(ovl)
 	slices.SortFunc(sorted, func(a, b Match) int {
@@ -277,9 +272,9 @@ func foldMangle(rng *rand.Rand, s string) string {
 }
 
 // TestCaseFoldRandomOracle 随机词库 × 随机折叠文本：
-//   - FindAllOverlapping(fold) 与逐位置 EqualFold 枚举 oracle 完全一致（含顺序）；
-//   - FindAll(fold) == 贪心最左最长(oracle)；
-//   - FindNext(fold) 以 End 推进迭代 == FindAll(fold)；
+//   - 折叠 FindAllOverlapping 与逐位置 strings.EqualFold 枚举 oracle 完全一致（含顺序）；
+//   - 折叠 FindAll == 贪心最左最长(oracle)；
+//   - 折叠 FindNext 以 End 推进迭代 == FindAll；
 //   - 精确命中 ⊆ fold 全量命中；不变量（切片恒等、rune 边界）全成立。
 func TestCaseFoldRandomOracle(t *testing.T) {
 	rng := rand.New(rand.NewSource(20260903))
@@ -288,15 +283,16 @@ func TestCaseFoldRandomOracle(t *testing.T) {
 		// 文本：随机折叠变形的关键词 + 噪声，词间可重叠拼接
 		text := randomText(rng, kws, 4, 40)
 		text = foldMangle(rng, text)
-		m := mustNew(t, kws)
+		fm := mustNewFold(t, kws)
+		em := mustNew(t, kws)
 
-		ovl := m.FindAllOverlapping(text, WithCaseFold())
+		ovl := fm.FindAllOverlapping(text)
 		wantOvl := foldOracleAll(kws, text)
 		if !slices.Equal(ovl, wantOvl) {
 			t.Fatalf("第 %d 组 Overlapping(fold) 与 oracle 不一致\n词库: %q\n文本: %q\ngot  (%d 条): %v\nwant (%d 条): %v",
 				iter, kws, text, len(ovl), ovl, len(wantOvl), wantOvl)
 		}
-		all := m.FindAll(text, WithCaseFold())
+		all := fm.FindAll(text)
 		wantAll := greedyLeftmostLongest(wantOvl)
 		if !slices.Equal(all, wantAll) {
 			t.Fatalf("第 %d 组 FindAll(fold) 与贪心 oracle 不一致\n词库: %q\n文本: %q\ngot  (%d 条): %v\nwant (%d 条): %v",
@@ -313,15 +309,15 @@ func TestCaseFoldRandomOracle(t *testing.T) {
 		for _, mt := range ovl {
 			ovlSet[mt] = struct{}{}
 		}
-		for _, mt := range m.FindAll(text) {
+		for _, mt := range em.FindAll(text) {
 			if _, ok := ovlSet[mt]; !ok {
 				t.Fatalf("第 %d 组精确命中 %+v 未出现在 fold 全量集合（文本 %q）", iter, mt, text)
 			}
 		}
-		// FindNext(fold) 迭代 == FindAll(fold)
+		// 折叠 FindNext 迭代 == 折叠 FindAll
 		var iterHits []Match
 		for off := 0; ; {
-			mt, ok := m.FindNext(text, off, WithCaseFold())
+			mt, ok := fm.FindNext(text, off)
 			if !ok {
 				break
 			}
@@ -336,145 +332,107 @@ func TestCaseFoldRandomOracle(t *testing.T) {
 }
 
 // TestCaseFoldAdjacentOverlapping 锁定折叠下的重叠/包含链：
-// "xKx" 词族在 k/Ｋ/K 混排文本上的全量出现与最左最长选择。
+// k/kk/kkk 词族在 k/K/开尔文度混排文本上的全量出现与最左最长选择。
 func TestCaseFoldAdjacentOverlapping(t *testing.T) {
 	const kelvin = "\u212A"
-	m := mustNew(t, []string{"k", "kk", "kkk"})
-	// 文本 k kK kKk（每个 rune 等折叠），全部出现按 oracle 枚举
+	m := mustNewFold(t, []string{"k", "kk", "kkk"})
+	// 文本 runes: k k K K(kelvin) K kelvin，全部折叠等价
 	text := "k" + "k" + "K" + kelvin + "K" + kelvin
-	ovl := m.FindAllOverlapping(text, WithCaseFold())
+	ovl := m.FindAllOverlapping(text)
 	wantOvl := foldOracleAll([]string{"k", "kk", "kkk"}, text)
 	if !slices.Equal(ovl, wantOvl) {
 		t.Fatalf("Overlapping(fold) 与 oracle 不一致\ntext: %q\ngot:  %v\nwant: %v", text, ovl, wantOvl)
 	}
-	all := m.FindAll(text, WithCaseFold())
+	all := m.FindAll(text)
 	if !slices.Equal(all, greedyLeftmostLongest(wantOvl)) {
 		t.Fatalf("FindAll(fold) 与贪心 oracle 不一致\ntext: %q\ngot:  %v\nwant: %v", text, all, greedyLeftmostLongest(wantOvl))
 	}
 }
 
 // ---------------------------------------------------------------------------
-// 边界与默认行为
+// 模式判别与边界
 // ---------------------------------------------------------------------------
 
 func TestCaseFoldEdges(t *testing.T) {
-	m := mustNew(t, []string{"Go", "中文"})
+	m := mustNewFold(t, []string{"Go", "中文"})
 	// 空文本 / 无命中
-	if got := m.FindAll("", WithCaseFold()); got != nil {
+	if got := m.FindAll(""); got != nil {
 		t.Errorf("空文本 fold 应返回 nil, got %v", got)
 	}
-	if got := m.FindAll("xyz", WithCaseFold()); got != nil {
+	if got := m.FindAll("xyz"); got != nil {
 		t.Errorf("无命中 fold 应返回 nil, got %v", got)
 	}
-	if _, ok := m.FindNext("xyz", 0, WithCaseFold()); ok {
+	if _, ok := m.FindNext("xyz", 0); ok {
 		t.Error("无命中 FindNext(fold) 应返回 false")
 	}
 	// 非法 UTF-8：不 panic、不误命中（RuneError 不在折叠轨道）
-	if got := m.FindAll("g\x88o Go", WithCaseFold()); len(got) != 1 || got[0] != (Match{4, 6, "Go"}) {
+	if got := m.FindAll("g\x88o Go"); len(got) != 1 || got[0] != (Match{4, 6, "Go"}) {
 		t.Errorf("非法字节 fold 结果不符: %v", got)
 	}
 	// offset 落在多字节字符中间：向后对齐（中=3B，\x96 为非法字节宽 1）
-	if mt, ok := m.FindNext("中\x96中文 Go", 1, WithCaseFold()); !ok || mt != (Match{4, 10, "中文"}) {
+	if mt, ok := m.FindNext("中\x96中文 Go", 1); !ok || mt != (Match{4, 10, "中文"}) {
 		t.Errorf("rune 对齐 fold 结果不符: (%+v, %v)", mt, ok)
 	}
 	// offset 语义：后缀首条平移
-	if mt, ok := m.FindNext("go go", 3, WithCaseFold()); !ok || mt != (Match{3, 5, "go"}) {
+	if mt, ok := m.FindNext("go go", 3); !ok || mt != (Match{3, 5, "go"}) {
 		t.Errorf("FindNext(fold, 3) = (%+v, %v), 期望 go(3,5)", mt, ok)
 	}
-	// 重复无效果、顺序无关
-	g1 := m.FindAll("GO go", WithCaseFold(), WithCaseFold())
-	g2 := m.FindAll("GO go", WithCaseFold())
-	if !slices.Equal(g1, g2) || len(g1) != 2 {
-		t.Errorf("重复选项应无效果: %v vs %v", g1, g2)
-	}
 }
 
-// TestCaseFoldDefaultUnaffected 默认（无选项）路径不触发折叠构建。
-func TestCaseFoldDefaultUnaffected(t *testing.T) {
-	m := mustNew(t, []string{"Go"})
-	_ = m.FindAll("go GO Go")
-	_ = m.FindAllOverlapping("go GO Go")
-	_, _ = m.FindNext("go GO Go", 0)
-	if m.fold != nil {
-		t.Error("精确查询不应触发折叠自动机构建")
-	}
-	_ = m.FindAll("go", WithCaseFold()) // 首次 fold 构建
-	if m.fold == nil {
-		t.Error("fold 查询应完成惰性构建")
-	}
-}
-
-// TestCaseFoldOnly New(WithCaseFold) 的 fold-only 模式：仅构建折叠自动机，
-// 所有查询（含不传选项）固定折叠语义且无法关闭。
-func TestCaseFoldOnly(t *testing.T) {
-	m, err := New([]string{"hello", "世界"}, WithCaseFold())
-	if err != nil {
-		t.Fatalf("New(fold-only) 意外失败: %v", err)
-	}
-	if m.exact != nil || m.fold == nil || !m.foldOnly {
-		t.Fatalf("fold-only 构建状态不符: exact=%v fold=%v foldOnly=%v", m.exact != nil, m.fold != nil, m.foldOnly)
-	}
+// TestCaseFoldMode 模式由 New 一次性定型：CaseFold 判别 + 各自语义。
+func TestCaseFoldMode(t *testing.T) {
 	text := "Hello, WORLD! 世界"
-	// 不传选项也走折叠
-	got := m.FindAll(text)
+	em := mustNew(t, []string{"hello", "世界"})
+	if em.CaseFold() {
+		t.Error("默认 New 应为精确模式（CaseFold=false）")
+	}
+	if got := em.FindAll(text); len(got) != 1 || got[0].Keyword != "世界" {
+		t.Errorf("精确模式结果不符: %v", got)
+	}
+	fm := mustNewFold(t, []string{"hello", "世界"})
+	if !fm.CaseFold() {
+		t.Error("WithCaseFold 构建应为折叠模式（CaseFold=true）")
+	}
 	want := []Match{{0, 5, "Hello"}, {14, 20, "世界"}}
-	if !slices.Equal(got, want) {
-		t.Errorf("fold-only FindAll = %v, 期望 %v", got, want)
+	if got := fm.FindAll(text); !slices.Equal(got, want) {
+		t.Errorf("折叠模式结果不符: %v", got)
 	}
-	// 显式传选项结果一致（不可关闭）
-	if got2 := m.FindAll(text, WithCaseFold()); !slices.Equal(got2, want) {
-		t.Errorf("fold-only 显式 fold 与默认不一致: %v vs %v", got2, want)
+	if ovl := fm.FindAllOverlapping("HeLLo hello"); len(ovl) != 2 {
+		t.Errorf("折叠 Overlapping 应两处均命中: %v", ovl)
 	}
-	// 三个 API 均折叠语义
-	if ovl := m.FindAllOverlapping("HeLLo hello", WithCaseFold()); len(ovl) != 2 {
-		t.Errorf("fold-only Overlapping 应两处均命中: %v", ovl)
-	}
-	if mt, ok := m.FindNext("say HELLO", 0); !ok || mt.Keyword != "HELLO" {
-		t.Errorf("fold-only FindNext = (%+v, %v), 期望命中 HELLO", mt, ok)
-	}
-	// 与惰性模式的 fold 结果一致
-	lazy := mustNew(t, []string{"hello", "世界"})
-	if !slices.Equal(m.FindAll(text), lazy.FindAll(text, WithCaseFold())) {
-		t.Error("fold-only 与惰性 fold 结果不一致")
+	if mt, ok := fm.FindNext("say HELLO", 0); !ok || mt.Keyword != "HELLO" {
+		t.Errorf("折叠 FindNext = (%+v, %v), 期望命中 HELLO", mt, ok)
 	}
 	// 校验错误语义与精确模式一致
 	if _, err := New([]string{""}, WithCaseFold()); err == nil {
-		t.Error("fold-only 空词应报错")
+		t.Error("折叠模式空词应报错")
 	}
 }
 
-// TestCaseFoldConcurrentLazy 并发混合 fold / 精确查询：-race 下无数据竞争，
-// fold 构建只发生一次（结果只读共享）。
-func TestCaseFoldConcurrentLazy(t *testing.T) {
-	m := mustNew(t, []string{"Go", "中国"})
+// TestCaseFoldConcurrent 两套 Matcher 并发查询：-race 下无数据竞争、结果稳定。
+func TestCaseFoldConcurrent(t *testing.T) {
+	em := mustNew(t, []string{"Go", "中国"})
+	fm := mustNewFold(t, []string{"Go", "中国"})
 	text := "go 中国 GO Go 中国"
+	want := fm.FindAll(text)
 	var wg sync.WaitGroup
 	for g := range 8 {
 		wg.Go(func() {
 			for i := range 50 {
 				switch (g + i) % 4 {
 				case 0:
-					_ = m.FindAll(text, WithCaseFold())
+					if got := fm.FindAll(text); !slices.Equal(got, want) {
+						t.Errorf("并发 fold FindAll 结果漂移: %v", got)
+					}
 				case 1:
-					_ = m.FindAll(text)
+					_ = em.FindAll(text)
 				case 2:
-					_, _ = m.FindNext(text, 0, WithCaseFold())
+					if _, ok := fm.FindNext(text, 0); !ok {
+						t.Error("并发 fold FindNext 应有命中")
+					}
 				case 3:
-					_ = m.FindAllOverlapping(text, WithCaseFold())
+					_ = fm.FindAllOverlapping(text)
 				}
-			}
-		})
-	}
-	wg.Wait()
-	if m.fold == nil {
-		t.Fatal("并发 fold 后折叠自动机仍未构建")
-	}
-	// 构建后只读：再次并发查询结果稳定
-	want := m.FindAll(text, WithCaseFold())
-	for range 8 {
-		wg.Go(func() {
-			if got := m.FindAll(text, WithCaseFold()); !slices.Equal(got, want) {
-				t.Errorf("并发 fold 结果漂移: %v vs %v", got, want)
 			}
 		})
 	}

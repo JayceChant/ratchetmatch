@@ -16,7 +16,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // mustNew 构建 Matcher，意外失败时立即终止当前测试。
-func mustNew(t *testing.T, keywords []string) *Matcher {
+func mustNew(t *testing.T, keywords []string) Matcher {
 	t.Helper()
 	m, err := New(keywords)
 	if err != nil {
@@ -80,7 +80,7 @@ func randomText(rng *rand.Rand, kws []string, minR, maxR int) string {
 }
 
 // findAllByFindNext 用 FindNext 从 0 开始、以上一次命中的 End 为下一 offset 迭代收集全部命中。
-func findAllByFindNext(m *Matcher, text string) []Match {
+func findAllByFindNext(m Matcher, text string) []Match {
 	var out []Match
 	for off := 0; ; {
 		mt, ok := m.FindNext(text, off)
@@ -136,7 +136,7 @@ func TestNewValidation(t *testing.T) {
 	// 中的 "世"(你→好→世) 是不同节点：root + 你/你好/好世/好世界/世/界 共 7 个；
 	// root 首字符表恰为 {你,世} 2 个（词首字符去重）；root 不进 CSR（走 map）。
 	m := mustNew(t, []string{"你好", "世界", "你好世界"})
-	em := m.exact
+	em := m.(*exactMatcher)
 	if len(em.nodes) != 7 {
 		t.Errorf("白盒: trie 节点数 = %d, 期望 7", len(em.nodes))
 	}
@@ -157,7 +157,7 @@ func TestNewValidation(t *testing.T) {
 //   - root 首字符表与各关键词首 rune 集一致（跳跃判据正确性前提）。
 func TestCSRLayout(t *testing.T) {
 	m := mustNew(t, benchKeywordsSparse)
-	em := m.exact
+	em := m.(*exactMatcher)
 	if len(em.transKeys) != len(em.transVals) {
 		t.Fatalf("transKeys(%d) 与 transVals(%d) 长度不一致", len(em.transKeys), len(em.transVals))
 	}
@@ -219,7 +219,7 @@ func TestCSRLayout(t *testing.T) {
 func TestAutomatonSemantics(t *testing.T) {
 	kws := benchKeywordsSparse
 	m := mustNew(t, kws)
-	em := m.exact
+	em := m.(*exactMatcher)
 
 	// DFS 还原每个节点的路径字符串（root 为空串，不入表）
 	paths := make([]string, len(em.nodes))
@@ -308,7 +308,7 @@ func TestFindBinaryBranch(t *testing.T) {
 		kws = append(kws, prefix+string(s))
 	}
 	m := mustNew(t, kws)
-	em := m.exact
+	em := m.(*exactMatcher)
 	// 前置白盒断言：P 节点确实宽于 16，扫描将走二分分支
 	pNode := int(em.rootNext['P'])
 	if len(em.rootNext) != 1 || em.nodes[pNode].count <= 16 {

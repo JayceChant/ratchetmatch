@@ -46,4 +46,11 @@
   - 测试：casefold_test.go（轨道白盒、语义表、300 组随机 oracle——逐位置 strings.EqualFold 全量枚举 + 贪心最左最长、并发惰性构建 -race）；FuzzMatch 追加 fold oracle 段与种子；45s fuzz 13.6 万 execs 零失败。
   - 验证：build/vet/gofmt/go fix/golangci-lint（0 issues）/test/-race 全过；基准无回退（FindAll 中文 1.84ms / 混合 0.99ms / 首停 101µs，allocs 13/11/3 与历史一致——resolve 变参展开与 !folded 分支不损零分配语义）。
 - 2026-09-03 结构重构（用户要求，Task 20）：fold 与非 fold 逻辑彻底分离——两套私有自动机 exactMatcher（exactNode：outLens 字节长）/ foldMatcher（foldNode：outRunes rune 数）共用泛型扫描引擎 machine[N]（nodeAPI 约束接口承载 seg/outs/start 三方法差异；两节点类型布局不同 → gcshape 各自单态化，热路径零接口开销），对外统一收敛在导出的 Matcher（exact/fold/once/foldOnly）；New 加变参：`New(kws, WithCaseFold())` = fold-only 模式（仅构建折叠自动机，所有查询固定折叠语义且无法关闭），默认仍为惰性构建。**陷阱记录**：filter 置位曾误用 `rune(kw[0])`（首字节 → U+00E5 而非首 rune 的编码首字节，多字节关键词全 skipForward 跳过、扫描零命中）；修复为按首 rune setFilterBit。**并发陷阱记录**：foldEngine 的 `if m.fold != nil` 快路径在 once.Do 外读 m.fold，-race 报真数据竞争；修复为无条件 once.Do（Once 快速路径自身原子且提供 happens-before）。fuzz 增加 fold-only == 惰性 fold 一致性不变量；-race/30s fuzz 26 万 execs 全过，基准 allocs 与时延无回退（泛型引擎 1.85/1.01ms、首停 93µs、allocs 13/11/3）。
+- 2026-09-03 API 定型（用户要求，Task 21）：**惰性构建与 Find 查询期选项整体取消**。业界调研结论（Hyperscan 逐模式 HS_FLAG_CASELESS / aho-corasick builder 的 ascii_case_insensitive / RE2 编译期 (?i)）一致表明：折叠是构建期属性，主流引擎均不支持查询期切换；「双模式单实例」并无生产先例，不该替用户决定。定型形态：
+  - **导出 Matcher 变为密封接口**（未导出方法 isInternal 保障演进自由），`exactMatcher` / `foldMatcher` 由类型别名升级为真实类型（嵌入 machine[N] 获得方法集），分别实现接口；`CaseFold() bool` 供调用方判别模式。类型即模式，无「字段二选一」的非法状态，无运行时分支。
+  - **Find 系列签名回归无变参**：FindAll(text) / FindAllOverlapping(text) / FindNext(text, offset)——与 v0.1.0 签名一致；模式选项仅存在于 New。
+  - 需同词库双模式 = 分别 New 两个实例（aho-corasick 惯例）。
+  - 删除：惰性构建（once/sync）、foldEngine、trieKeywords（从精确 trie 还原词库的整套机制——fold 现直接从关键词构建）、matcher 外壳双字段。
+  - 文件重排同步：matcher.go（接口+New）/ option.go（Option/WithCaseFold）/ engine.go（节点+引擎）/ build.go（双构建管线）。
+  - 验证：全链路门槛 + example 模块通过；30s fuzz 全过；基准无回退（接口分发的 itab 开销相对扫描本身可忽略，FindAllMixed 1.02ms / 11 allocs 持平）。
 - 2026-09-03 SonarCloud 覆盖率排除 example/：example 目录并入仓库（Task 18）后，`sonar.sources=.` 会把示例代码计入覆盖率分母，而 coverage.txt 只含根模块（example 是独立 module，`go test ./...` 不编译它），SonarCloud 面板覆盖率因此被拉低；Codecov 不受影响（只消费 coverage.txt）。修正：sonar-project.properties 的 `sonar.exclusions` 追加 `**/example/**`。示例程序的验证靠运行核对而非单测覆盖，不参与覆盖率统计是预期行为。

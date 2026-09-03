@@ -193,32 +193,35 @@ func FuzzMatch(f *testing.F) {
 			}
 		}
 
-		// --- fold：Overlapping 与逐位置 strings.EqualFold 枚举 oracle 一致 ---
-		foldOvl := m.FindAllOverlapping(s, WithCaseFold())
+		// --- fold：独立构建折叠 Matcher，与 oracle 对照 ---
+		// 折叠模式与精确模式是两套独立实例（模式构建期定型），此处分别构建。
+		fm, err := New(kws, WithCaseFold())
+		if err != nil {
+			t.Fatalf("New(fold) 意外失败: %v", err)
+		}
+		if !fm.CaseFold() {
+			t.Fatalf("New(WithCaseFold) 应返回折叠模式（词库 %q）", kws)
+		}
+		if m.CaseFold() {
+			t.Fatalf("默认 New 应返回精确模式（词库 %q）", kws)
+		}
+		foldOvl := fm.FindAllOverlapping(s)
 		wantFoldOvl := foldOracleAll(kws, s)
 		if !slices.Equal(foldOvl, wantFoldOvl) {
 			t.Fatalf("Overlapping(fold) %d 条与 oracle %d 条不一致（词库 %q, 文本 %q）\ngot:  %v\nwant: %v",
 				len(foldOvl), len(wantFoldOvl), kws, s, foldOvl, wantFoldOvl)
 		}
 		// --- fold：FindAll == 贪心最左最长(oracle) ---
-		foldAll := m.FindAll(s, WithCaseFold())
+		foldAll := fm.FindAll(s)
 		wantFoldAll := greedyLeftmostLongest(wantFoldOvl)
 		if !slices.Equal(foldAll, wantFoldAll) {
 			t.Fatalf("FindAll(fold) 与贪心 oracle 不一致（词库 %q, 文本 %q）\ngot:  %v\nwant: %v",
 				kws, s, foldAll, wantFoldAll)
 		}
-		// --- fold-only Matcher 与惰性构建的 fold 结果一致 ---
-		mo, err := New(kws, WithCaseFold())
-		if err != nil {
-			t.Fatalf("New(fold-only) 意外失败: %v", err)
-		}
-		if !slices.Equal(mo.FindAll(s), foldAll) {
-			t.Fatalf("fold-only FindAll 与惰性 fold 不一致（词库 %q, 文本 %q）", kws, s)
-		}
 		// --- fold：FindNext 迭代 == FindAll；任意 offset == 后缀首条平移 ---
 		var foldIter []Match
 		for off := 0; ; {
-			mt, ok := m.FindNext(s, off, WithCaseFold())
+			mt, ok := fm.FindNext(s, off)
 			if !ok {
 				break
 			}
@@ -229,8 +232,8 @@ func FuzzMatch(f *testing.F) {
 			t.Fatalf("FindNext(fold) 迭代与 FindAll(fold) 不一致（词库 %q, 文本 %q）", kws, s)
 		}
 		for off := 0; off <= len(s); off++ {
-			got, ok := m.FindNext(s, off, WithCaseFold())
-			wantAll := m.FindAll(s[off:], WithCaseFold())
+			got, ok := fm.FindNext(s, off)
+			wantAll := fm.FindAll(s[off:])
 			if len(wantAll) > 0 {
 				want := wantAll[0]
 				want.Start += off

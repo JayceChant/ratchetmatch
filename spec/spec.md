@@ -4,7 +4,7 @@
 
 给定词库（多个关键词），对每条输入的长文本单遍扫描，返回全部命中关键词及位置，采用非重叠最左最长语义。现有通用实现未针对中文 rune 特点优化，且缺少明确的命中优先级语义，本库补此空白。Go 1.27、零第三方依赖。
 
-公共 API：`New` / `FindAll` / `FindAllOverlapping` / `FindNext`（签名与契约见各 Requirement）。Find 系列均带变参 `opts ...Option`（不传 = 默认行为，源兼容），当前唯一选项 `WithCaseFold` 启用大小写折叠查询（见对应 Requirement）。**本 spec 为 API 契约与匹配语义的权威描述，修改行为须先改本文件。**
+公共 API：`New` / `FindAll` / `FindAllOverlapping` / `FindNext`（签名与契约见各 Requirement）。**Matcher 为导出接口**（经未导出方法密封，仅本包提供实现），匹配模式由 `New` 的选项一次性定型：默认精确匹配（exactMatcher），`New(kws, WithCaseFold())` 为 SimpleFold 轨道折叠匹配（foldMatcher）；两套实现独立，需同时使用时分别 `New`（2026-09-03 定型，取代早先的「struct 外壳 + 查询期选项/惰性构建」方案）。**本 spec 为 API 契约与匹配语义的权威描述，修改行为须先改本文件。**
 
 ## Non-Goals
 
@@ -15,27 +15,24 @@
 
 ## Requirements
 
-### Requirement: caseFold 查询（WithCaseFold 变参选项）
+### Requirement: caseFold 匹配（WithCaseFold 构建选项）
 
-`New` 与 Find 系列均接受变参 `opts ...Option`，`WithCaseFold() Option` 使匹配按 Unicode SimpleFold 轨道折叠语义进行（`strings.EqualFold` 等价：文本 rune 与关键词 rune fold 相等即匹配）。变参为空 = 精确匹配，行为与本 Requirement 引入前完全一致：
+`New` 接受变参 `opts ...Option`，`WithCaseFold() Option` 构建按 Unicode SimpleFold 轨道折叠语义匹配的自动机（`strings.EqualFold` 等价：文本 rune 与关键词 rune fold 相等即匹配）。变参为空 = 精确匹配。**模式构建期定型且不可更改**；Matcher 接口提供 `CaseFold() bool` 供调用方判别（2026-09-03 定型，用户决策：不再提供查询期选项与惰性构建——折叠改变自动机结构而非可比对属性，查询期切换在语义上不健全，且主流引擎均以 caseless 为构建期属性）：
 
-- **折叠自动机构建期生成**：fold-equal 的边在插入时合一（共享目标节点，outLens 为折叠等价关键词的并集）——查询期在同一精确自动机上换 EqualFold 比较不可行（折叠冲突的兄弟分支只走其一，必漏报变体词典）
-- **两种构建模式**（2026-09-03 修订，用户定夺）：
-  - `New(keywords)`（默认）：仅构建精确自动机；首次 fold 查询时在同一 `Matcher` 内惰性构建折叠自动机（一次性、此后只读，`sync.Once` 保证并发安全），词库由精确 trie 无损还原（trieKeywords：词尾判据 outLens[0] == 路径字节长），不在 Matcher 中驻留
-  - `New(keywords, WithCaseFold())`（fold-only）：仅构建折叠自动机（精确成员为 nil），后续所有查询固定按折叠语义执行且无法关闭
-- **内部结构**：两套私有自动机 exactMatcher（exactNode：outLens 字节长）/ foldMatcher（foldNode：outRunes 关键词 rune 数）共用泛型扫描引擎 machine[N]（step/find/skipForward/scan/链归并单一实现，节点约束接口承载命中起点计算差异；exactNode/foldNode 布局不同 → gcshape 各自单态化，热路径零接口开销）；对外统一收敛在导出的 Matcher（exact/fold/once/foldOnly 字段）
+- **类型即模式**：导出的 `Matcher` 为密封接口（未导出方法 `isInternal` 保证仅本包实现），`exactMatcher` / `foldMatcher` 两套私有类型（各嵌入共用泛型引擎 `machine[N]`）分别实现之——无运行时模式分支，无「字段二选一」的中间状态；需同一词库的两种模式时分别 `New` 两个实例（与 aho-corasick / Hyperscan / RE2 的 caseless 构建模式一致，业界均不支持查询期切换）
+- **折叠自动机构建期生成**：fold-equal 的边在插入时合一（共享目标节点，outRunes 为折叠等价关键词的并集）——查询期在同一精确自动机上换 EqualFold 比较不可行（折叠冲突的兄弟分支只走其一，必漏报变体词典）
 - **首字符筛选 = 轨道展开**：rootNext/byteFilter/CSR 边 key 均展开为各 rune 的全部 SimpleFold 轨道成员（轨道互不相交、每轨道成员数 ≤4，词库规模膨胀为常数倍）——CSR 段内仍严格升序（二分/线性查找零改动），skipForward 判据不变，查询热路径与精确模式完全共用、零分支零归一
-- 匹配语义（FindAll / FindAllOverlapping / FindNext）与精确模式逐条对应：非重叠最左最长、End 升序全量、首命中即停，均以折叠等价替换精确相等；**同一 Matcher 的 fold 查询输出 ≡ 先把词库全部折叠归一去重、再按同等最左最长语义对折叠后文本扫描的结果**（等价 oracle 见测试）
+- 匹配语义（FindAll / FindAllOverlapping / FindNext）与精确模式逐条对应：非重叠最左最长、End 升序全量、首命中即停，均以折叠等价替换精确相等；**fold Matcher 的输出 ≡ 先把词库全部折叠归一去重、再按同等最左最长语义对折叠后文本扫描的结果**（等价 oracle 见测试）
 - **命中区间按文本侧实际消耗提取**：fold 轨道成员 UTF-8 宽度可不同（如 K U+212A 3 字节 vs k 1 字节），字节长不可直接回退起点；fold 自动机输出存关键词 rune 数，命中时按 rune 数从 End 向前走 rune 边界提取 Start，`Match.Keyword = text[Start:End]`（文本原样切片，非关键词原件——同一关键词可折叠匹配出多种大小写形态）
 - fold 匹配按逐 rune SimpleFold 比较：文本非法字节按 RuneError 处理（不在任何折叠轨道，等同精确模式）；SimpleFold 不做多 rune 展开（ß→ss）——关键词含 ß 时只匹配含 ß 的文本
 - fold 模式下 BM 跳跃安全性：折叠自动机首字符集已含全部轨道成员，root 态跳跃判据（起始 rune 必在首字符集）不变
 
 #### Scenario: fold 查询
-- **WHEN** `m, _ := New([]string{"hello","世界"}); m.FindAll("Hello, WORLD! 世界", WithCaseFold())` **THEN** 命中 `Hello`(0,5) 与 `世界`(14,20)；不带选项调用同词库同文本仅命中 `世界`
-- **WHEN** `m, _ := New([]string{"hello","世界"}, WithCaseFold()); m.FindAll("Hello, WORLD! 世界")`（fold-only，不传选项）**THEN** 结果与惰性模式 fold 查询完全一致
+- **WHEN** `m, _ := New([]string{"hello","世界"}); m.FindAll("Hello, WORLD! 世界")`（精确）与 `fm, _ := New([]string{"hello","世界"}, WithCaseFold()); fm.FindAll("Hello, WORLD! 世界")`（折叠）对照 **THEN** 折叠命中 `Hello`(0,5) 与 `世界`(14,20)，精确仅命中 `世界`
+- **WHEN** `m, _ := New([]string{"hello","世界"}, WithCaseFold()); m.FindAll("Hello, WORLD! 世界")`（折叠 Matcher，不传任何查询选项）**THEN** 结果与「词库折叠归一去重后对折叠文本精确扫描」的 oracle 完全一致
 - **WHEN** 词库 {"Stop","stop"}，文本 "SToP sTop"（fold 查询）**THEN** 两处均命中（精确查询漏报其一——同节点不可能走两条分支，构建期合一即修复）
 - **WHEN** 词库 {"K"}（U+212A 开尔文度），文本 "k K"（fold 查询）**THEN** 命中 k(0,1) 与 K(2,5)：区间按文本侧宽度提取，Keyword 为文本切片
-- **WHEN** 并发 8 goroutine 混合 fold / 精确查询同一 Matcher **THEN** `-race` 通过，fold 首次构建仅发生一次
+- **WHEN** 并发 8 goroutine 分别对精确 Matcher 与折叠 Matcher 查询 **THEN** `-race` 通过、结果稳定
 
 ### Requirement: 词库构建与校验
 
@@ -161,7 +158,7 @@
 
 ### Requirement: 并发安全
 
-`Matcher` 构建完成后 SHALL 为只读（无查询期可变状态），`FindAll` / `FindNext` 可无锁并发调用；`go test -race` 下并发测试通过。fold 首次查询触发的折叠自动机惰性构建由 `sync.Once` 串行化（并发 fold 调用等待构建完成后共同使用只读结果），不破坏本约束。
+`Matcher` 实现构建完成后 SHALL 为只读（无查询期可变状态），`FindAll` / `FindNext` 可无锁并发调用；`go test -race` 下并发测试通过（精确与折叠两套实现分别覆盖）。
 
 ### Requirement: 质量与工程化
 

@@ -98,12 +98,12 @@ var benchNoiseRunes = []rune("的在了是和有就不人都一个上中大来�
 
 var (
 	// 稀疏词库：自动机、BM 坏字符表与两份长文本
-	benchMatcherSparse *Matcher
+	benchMatcherSparse Matcher
 	benchBMSparse      [][256]int
 	benchTextZhSparse  string // 纯中文：约 10 万 rune（~300KB）
 	benchTextMixSparse string // 中英混合：约 10 万 rune（约一半 ASCII）
 	// 重叠词库：同上四件套
-	benchMatcherOverlap *Matcher
+	benchMatcherOverlap Matcher
 	benchBMOverlap      [][256]int
 	benchTextZhOverlap  string
 	benchTextMixOverlap string
@@ -257,8 +257,8 @@ func collectLeftmostLongest(text string, occs []interval) []Match {
 // 与 FindAll 一致。词尾判定用 outLens[0] == 起点至今路径的字节长度：成品
 // 节点不存 termLen，而 outLens 严格降序、首元素即自身词长（fail 链继承的
 // 真后缀关键词严格更短），该等式成立当且仅当路径节点是词尾。
-func trieFindAll(m *Matcher, text string) []Match {
-	em := m.exact // 纯 Trie 参照只关心精确自动机的 trie 结构
+func trieFindAll(m Matcher, text string) []Match {
+	em := m.(*exactMatcher) // 纯 Trie 参照只关心精确自动机的 trie 结构
 	n := len(text)
 	pos := 0
 	var out []Match
@@ -405,7 +405,7 @@ func stringsIndexFindNext(keywords []string, text string, offset int) (Match, bo
 func TestBaselineEquiv(t *testing.T) {
 	for _, d := range []struct {
 		name     string
-		matcher  *Matcher
+		matcher  Matcher
 		keywords []string
 		tables   [][256]int
 		texts    [2]string

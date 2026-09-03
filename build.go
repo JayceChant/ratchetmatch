@@ -1,7 +1,7 @@
-// 本文件为两套自动机的构建管线（公共 API 见 matcher.go，查询引擎见
+// 本文件为两套自动机的构建管线（公共接口见 matcher.go，查询引擎见
 // engine.go，选项见 option.go）：精确构建（trie 插入 → BFS 失败指针 → CSR
 // 展平 → BM 字节过滤器）与折叠构建（SimpleFold 轨道代表合一 + 轨道展开，
-// 见文件末段），另含供惰性构建复用的关键词还原（trieKeywords）。
+// 见文件末段）。两套管线均直接从关键词列表构建，构建后即定型为对应模式。
 package ratchetmatch
 
 import (
@@ -157,7 +157,8 @@ func setFilterBit(bf *[32]byte, r rune) {
 	bf[buf[0]>>3] |= 1 << (buf[0] & 7)
 }
 
-// buildExact 从去重后的关键词列表构建精确自动机。
+// buildExact 从去重后的关键词列表构建精确自动机（New 默认模式的实现体，
+// 见 matcher.go）。
 func buildExact(keywords []string) *exactMatcher {
 	b := newBuilder(len(keywords))
 	em := &exactMatcher{}
@@ -220,9 +221,9 @@ type foldBuilderNode struct {
 	outRunes []int32 // BFS 后定型：全部输出 rune 数，严格降序无重复（见 flushFoldTerms）
 }
 
-// buildFold 从去重后的关键词列表构建折叠自动机（New 的 fold-only 模式与
-// 首次 fold 查询的惰性构建共用）。流程与精确构建相同：插词 → BFS 失败指针
-// → 展平 CSR；差异仅在边按折叠代表合一、失败指针按折叠匹配计算、root 表/
+// buildFold 从去重后的关键词列表构建折叠自动机（New(WithCaseFold()) 的
+// 实现体，见 matcher.go）。流程与精确构建相同：插词 → BFS 失败指针 →
+// 展平 CSR；差异仅在边按折叠代表合一、失败指针按折叠匹配计算、root 表/
 // 字节过滤器/CSR 键展开为全部轨道成员、输出为关键词 rune 数。
 func buildFold(keywords []string) *foldMatcher {
 	fm := &foldMatcher{}
@@ -356,31 +357,4 @@ func (b *foldBuilder) flattenFold(fm *foldMatcher) {
 	fm.transKeys = keys
 	fm.transVals = vals
 	fm.rootNext = root
-}
-
-// trieKeywords 从精确自动机还原去重后的关键词列表（rune 路径拼接），供
-// 惰性构建折叠自动机复用（词库不在 Matcher 中驻留）。词尾判定
-// outLens[0] == 路径字节长：termLen 即全路径字节长，fail 链继承的真后缀
-// 严格更短，等式精确（与基准 trieFindAll 同一判据）；root 走 rootNext。
-func trieKeywords(m *exactMatcher) []string {
-	var kws []string
-	var walk func(s int32, prefix []rune, bytes int)
-	walk = func(s int32, prefix []rune, bytes int) {
-		nd := &m.nodes[s]
-		if len(nd.outLens) > 0 && int(nd.outLens[0]) == bytes {
-			kws = append(kws, string(prefix)) // string() 拷贝前缀，DFS 复用底层数组安全
-		}
-		if s == 0 {
-			for r, t := range m.rootNext {
-				walk(t, append(prefix, r), bytes+utf8.RuneLen(r))
-			}
-			return
-		}
-		for i := range nd.count {
-			r := m.transKeys[nd.base+i]
-			walk(m.transVals[nd.base+i], append(prefix, r), bytes+utf8.RuneLen(r))
-		}
-	}
-	walk(0, nil, 0)
-	return kws
 }
