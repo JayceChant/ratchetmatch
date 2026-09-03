@@ -12,8 +12,10 @@
 // 词（真包含关系一律输出最长）。
 //
 // 内部为两套独立自动机：精确（exactMatcher）与折叠（foldMatcher，SimpleFold
-// 轨道语义），共用同一套泛型扫描引擎（machine，见 search.go），命中区间
-// 提取的差异由节点类型分别实现。对外统一收敛在导出的 Matcher 上：
+// 轨道语义），共用同一套泛型扫描引擎（machine，见 engine.go），命中区间
+// 提取的差异由节点类型分别实现。文件布局：matcher.go 公共 API（本文件）/
+// option.go 查询与构建选项 / engine.go 扫描引擎 / build.go 双自动机构建。
+// 对外统一收敛在导出的 Matcher 上：
 //   - New(keywords)：仅构建精确自动机；折叠自动机在首次 WithCaseFold 查询
 //     时惰性构建（一次性，之后只读，并发安全）；
 //   - New(keywords, WithCaseFold())：仅构建折叠自动机（fold-only），后续所有
@@ -48,53 +50,6 @@ type Matcher struct {
 	foldOnly bool          // New(WithCaseFold)：所有查询固定走 fold，无法关闭
 }
 
-// Option 定制 New 与 Find 系列调用的行为。零值不改变默认行为。
-type Option func(*queryOpts)
-
-// queryOpts 聚合一次调用的全部选项（变参展开结果）。
-type queryOpts struct {
-	caseFold bool
-}
-
-// WithCaseFold 启用大小写折叠匹配（strings.EqualFold 语义：逐 rune 的
-// SimpleFold 轨道等价），"Hello" 可命中关键词 "hello"。大小写变体关键词
-// 在折叠自动机中合一，不漏报；无展开式折叠（ß 不匹配 ss）。
-//
-// 用法一（惰性）：m, _ := New(kws); m.FindAll(text, WithCaseFold())——首次
-// fold 查询在同一 Matcher 内构建折叠自动机（一次性，之后只读，并发 fold
-// 查询经 sync.Once 串行等待），精确查询不受任何影响。
-// 用法二（fold-only）：m, _ := New(kws, WithCaseFold())——仅构建折叠自动机，
-// 后续所有查询（含不传选项的）固定按折叠语义执行且无法关闭；精确查询需求
-// 另建 Matcher。选项对象建议提升为包级变量复用（如 var fold =
-// ratchetmatch.WithCaseFold()），避免每次调用分配闭包。
-// 命中区间的 Keyword 为文本原样切片（如关键词 "hello" 命中文本 "Hello" 时
-// Keyword 为 "Hello"），Start/End 仍可直接切文本。
-func WithCaseFold() Option {
-	return func(o *queryOpts) { o.caseFold = true }
-}
-
-// wantsFold 判定一次变参调用是否要求折叠语义。
-func wantsFold(opts []Option) bool {
-	var o queryOpts
-	for _, opt := range opts {
-		opt(&o)
-	}
-	return o.caseFold
-}
-
-// foldEngine 返回折叠自动机；惰性模式下首次调用构建一次（并发安全，其它
-// goroutine 等待构建完成后共同使用只读结果）。构建必须无条件经 once.Do：
-// Once 的快速路径自身原子且提供 happens-before，绕过它读 m.fold 会引入
-// 数据竞争。词库由精确 trie 无损还原（trieKeywords），不在 Matcher 中驻留。
-func (m *Matcher) foldEngine() *foldMatcher {
-	m.once.Do(func() {
-		if m.fold == nil { // fold-only 构建的 Matcher 不会走到这里，防御兜底
-			m.fold = buildFold(trieKeywords(m.exact))
-		}
-	})
-	return m.fold
-}
-
 // New 根据关键词列表构建 Matcher。
 //
 // 关键词列表不能为空；关键词本身不能为空字符串；重复关键词会被自动去重。
@@ -122,15 +77,7 @@ func New(keywords []string, opts ...Option) (*Matcher, error) {
 			return nil, fmt.Errorf("ratchetmatch: keyword at index %d contains U+FFFD (replacement character)", i)
 		}
 	}
-	seen := make(map[string]struct{}, len(keywords)) // 构建期临时去重表
-	kws := make([]string, 0, len(keywords))
-	for _, kw := range keywords {
-		if _, dup := seen[kw]; dup {
-			continue
-		}
-		seen[kw] = struct{}{}
-		kws = append(kws, kw)
-	}
+	kws := dedupe(keywords) // 构建期去重（见 build.go）
 	if wantsFold(opts) {
 		return &Matcher{fold: buildFold(kws), foldOnly: true}, nil
 	}

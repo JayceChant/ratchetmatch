@@ -1,3 +1,7 @@
+// 本文件为两套自动机（exactMatcher / foldMatcher）共用的泛型扫描引擎：
+// nodeAPI 约束接口 + machine[N] 转移与扫描 + 最左最长待提交链。节点类型
+// （exactNode/foldNode）与其构建管线分见本文件与 build.go；公共 API 见
+// matcher.go，选项见 option.go。
 package ratchetmatch
 
 import "unicode/utf8"
@@ -9,9 +13,48 @@ import "unicode/utf8"
 // 不同，泛型按 gcshape 各自单态化，节点方法在热路径编译为直接调用，零接口
 // 开销。
 type nodeAPI interface {
+	// seg 返回节点的转移布局：自有边区间在 transKeys/transVals 中的起始下标
+	// base 与条数 count（段内键升序，供 find 线性/二分查找），以及失败指针
+	// fail（未命中时沿其回退重试，root 为 0）。
 	seg() (base, count, fail int32)
+	// outs 返回以该状态结束的输出条数；0 表示无输出（叶子或仅继承失败链的
+	// 节点），此时 start 不会被调用。
 	outs() int
+	// start 返回以 pos 结尾的第 i 个输出的命中起点（字节下标，rune 边界）：
+	// 精确节点按关键词字节长回退，折叠节点按关键词 rune 数回退（轨道成员
+	// 字节宽可不同，见 runeStartBack）。text 为被扫描文本。
 	start(text string, pos, i int) int
+}
+
+// exactNode 是精确自动机的查询期状态：outLens 为以当前状态结束的全部关键词
+// 字节长度，严格降序（自身 + 失败链继承；自身必为真后缀关键词的最长者）；
+// nil 表示无输出。命中起点 = pos − 关键词字节长（文本消耗恒等于关键词字节长）。
+type exactNode struct {
+	base    int32   // 自有边区间在 transKeys/transVals 中的起始下标
+	count   int32   // 自有边条数
+	fail    int32   // 失败指针：已匹配部分的最长真后缀（且是词库中某关键词前缀）对应的节点；无则指向 root
+	outLens []int32 // 全部输出关键词字节长，严格降序；nil 表示无
+}
+
+func (n exactNode) seg() (base, count, fail int32) { return n.base, n.count, n.fail }
+func (n exactNode) outs() int                      { return len(n.outLens) }
+func (n exactNode) start(_ string, pos, i int) int { return pos - int(n.outLens[i]) }
+
+// foldNode 是折叠自动机的查询期状态：outRunes 为以当前状态结束的全部关键词
+// rune 数，严格降序且无重复（自身 + 失败链继承；同节点多个折叠变体关键词
+// 只保留一条）。命中起点 = 从 pos 按 rune 数向前回退（轨道成员字节宽可不同，
+// 关键词字节长不可直接用作文本消耗，见 runeStartBack）。
+type foldNode struct {
+	base     int32   // 同 exactNode
+	count    int32   // 同 exactNode
+	fail     int32   // 同 exactNode
+	outRunes []int32 // 全部输出关键词 rune 数，严格降序无重复；nil 表示无
+}
+
+func (n foldNode) seg() (base, count, fail int32) { return n.base, n.count, n.fail }
+func (n foldNode) outs() int                      { return len(n.outRunes) }
+func (n foldNode) start(text string, pos, i int) int {
+	return runeStartBack(text, pos, int(n.outRunes[i]))
 }
 
 // machine 是精确/折叠两套自动机共用的查询引擎。转移表为全局 CSR 数组

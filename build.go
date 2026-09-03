@@ -1,3 +1,7 @@
+// 本文件为两套自动机的构建管线（公共 API 见 matcher.go，查询引擎见
+// engine.go，选项见 option.go）：精确构建（trie 插入 → BFS 失败指针 → CSR
+// 展平 → BM 字节过滤器）与折叠构建（SimpleFold 轨道代表合一 + 轨道展开，
+// 见文件末段），另含供惰性构建复用的关键词还原（trieKeywords）。
 package ratchetmatch
 
 import (
@@ -6,40 +10,18 @@ import (
 	"unicode/utf8"
 )
 
-// ---------------------------------------------------------------------------
-// 节点定义：两套自动机各自独立，仅布局约定（base/count/fail + 降序输出数组）
-// 与转移查找共用；命中起点计算（nodeAPI.start）分别实现。
-// ---------------------------------------------------------------------------
-
-// exactNode 是精确自动机的查询期状态：outLens 为以当前状态结束的全部关键词
-// 字节长度，严格降序（自身 + 失败链继承；自身必为真后缀关键词的最长者）；
-// nil 表示无输出。命中起点 = pos − 关键词字节长（文本消耗恒等于关键词字节长）。
-type exactNode struct {
-	base    int32   // 自有边区间在 transKeys/transVals 中的起始下标
-	count   int32   // 自有边条数
-	fail    int32   // 失败指针：已匹配部分的最长真后缀（且是词库中某关键词前缀）对应的节点；无则指向 root
-	outLens []int32 // 全部输出关键词字节长，严格降序；nil 表示无
-}
-
-func (n exactNode) seg() (base, count, fail int32) { return n.base, n.count, n.fail }
-func (n exactNode) outs() int                      { return len(n.outLens) }
-func (n exactNode) start(_ string, pos, i int) int { return pos - int(n.outLens[i]) }
-
-// foldNode 是折叠自动机的查询期状态：outRunes 为以当前状态结束的全部关键词
-// rune 数，严格降序且无重复（自身 + 失败链继承；同节点多个折叠变体关键词
-// 只保留一条）。命中起点 = 从 pos 按 rune 数向前回退（轨道成员字节宽可不同，
-// 关键词字节长不可直接用作文本消耗，见 runeStartBack）。
-type foldNode struct {
-	base     int32   // 同 exactNode
-	count    int32   // 同 exactNode
-	fail     int32   // 同 exactNode
-	outRunes []int32 // 全部输出关键词 rune 数，严格降序无重复；nil 表示无
-}
-
-func (n foldNode) seg() (base, count, fail int32) { return n.base, n.count, n.fail }
-func (n foldNode) outs() int                      { return len(n.outRunes) }
-func (n foldNode) start(text string, pos, i int) int {
-	return runeStartBack(text, pos, int(n.outRunes[i]))
+// dedupe 按原始出现顺序去重关键词列表（New 的构建期临时步骤）。
+func dedupe(keywords []string) []string {
+	seen := make(map[string]struct{}, len(keywords))
+	kws := make([]string, 0, len(keywords))
+	for _, kw := range keywords {
+		if _, dup := seen[kw]; dup {
+			continue
+		}
+		seen[kw] = struct{}{}
+		kws = append(kws, kw)
+	}
+	return kws
 }
 
 // ---------------------------------------------------------------------------
