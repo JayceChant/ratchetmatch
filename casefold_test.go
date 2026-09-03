@@ -6,7 +6,6 @@
 package ratchetmatch
 
 import (
-	"maps"
 	"math/rand"
 	"slices"
 	"strings"
@@ -75,12 +74,10 @@ func TestTrieKeywordsRestore(t *testing.T) {
 	}
 	for _, pool := range pools {
 		m := mustNew(t, pool)
-		want := make(map[string]struct{}, len(pool))
-		for _, kw := range pool {
-			want[kw] = struct{}{}
-		}
-		got := trieKeywords(m)
-		if !maps.Equal(got, want) {
+		got := trieKeywords(m.exact)
+		slices.Sort(got)
+		want := slices.Compact(slices.Sorted(slices.Values(pool)))
+		if !slices.Equal(got, want) {
 			t.Errorf("trieKeywords 还原不符\ngot  %v\nwant %v", got, want)
 		}
 	}
@@ -398,12 +395,51 @@ func TestCaseFoldDefaultUnaffected(t *testing.T) {
 	_ = m.FindAll("go GO Go")
 	_ = m.FindAllOverlapping("go GO Go")
 	_, _ = m.FindNext("go GO Go", 0)
-	if m.froot != nil {
+	if m.fold != nil {
 		t.Error("精确查询不应触发折叠自动机构建")
 	}
 	_ = m.FindAll("go", WithCaseFold()) // 首次 fold 构建
-	if m.froot == nil || !m.froot.folded {
+	if m.fold == nil {
 		t.Error("fold 查询应完成惰性构建")
+	}
+}
+
+// TestCaseFoldOnly New(WithCaseFold) 的 fold-only 模式：仅构建折叠自动机，
+// 所有查询（含不传选项）固定折叠语义且无法关闭。
+func TestCaseFoldOnly(t *testing.T) {
+	m, err := New([]string{"hello", "世界"}, WithCaseFold())
+	if err != nil {
+		t.Fatalf("New(fold-only) 意外失败: %v", err)
+	}
+	if m.exact != nil || m.fold == nil || !m.foldOnly {
+		t.Fatalf("fold-only 构建状态不符: exact=%v fold=%v foldOnly=%v", m.exact != nil, m.fold != nil, m.foldOnly)
+	}
+	text := "Hello, WORLD! 世界"
+	// 不传选项也走折叠
+	got := m.FindAll(text)
+	want := []Match{{0, 5, "Hello"}, {14, 20, "世界"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("fold-only FindAll = %v, 期望 %v", got, want)
+	}
+	// 显式传选项结果一致（不可关闭）
+	if got2 := m.FindAll(text, WithCaseFold()); !slices.Equal(got2, want) {
+		t.Errorf("fold-only 显式 fold 与默认不一致: %v vs %v", got2, want)
+	}
+	// 三个 API 均折叠语义
+	if ovl := m.FindAllOverlapping("HeLLo hello", WithCaseFold()); len(ovl) != 2 {
+		t.Errorf("fold-only Overlapping 应两处均命中: %v", ovl)
+	}
+	if mt, ok := m.FindNext("say HELLO", 0); !ok || mt.Keyword != "HELLO" {
+		t.Errorf("fold-only FindNext = (%+v, %v), 期望命中 HELLO", mt, ok)
+	}
+	// 与惰性模式的 fold 结果一致
+	lazy := mustNew(t, []string{"hello", "世界"})
+	if !slices.Equal(m.FindAll(text), lazy.FindAll(text, WithCaseFold())) {
+		t.Error("fold-only 与惰性 fold 结果不一致")
+	}
+	// 校验错误语义与精确模式一致
+	if _, err := New([]string{""}, WithCaseFold()); err == nil {
+		t.Error("fold-only 空词应报错")
 	}
 }
 
@@ -430,7 +466,7 @@ func TestCaseFoldConcurrentLazy(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if m.froot == nil {
+	if m.fold == nil {
 		t.Fatal("并发 fold 后折叠自动机仍未构建")
 	}
 	// 构建后只读：再次并发查询结果稳定

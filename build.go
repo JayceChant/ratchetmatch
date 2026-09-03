@@ -1,26 +1,54 @@
 package ratchetmatch
 
 import (
-	"cmp"
 	"slices"
 	"unicode"
 	"unicode/utf8"
 )
 
-// node 是自动机查询期的一个状态。转移表不直接存于节点：全局 CSR 数组中
-// [base, base+count) 区间仅存该节点的自有 trie 边（键升序）。
-// 未含的 rune 沿 fail 链回退重试；回退到 root 仍未含则留在 root。
-type node struct {
-	base     int32   // 自有边区间在 Matcher.transKeys/transVals 中的起始下标
-	count    int32   // 自有边条数
-	fail     int32   // 失败指针：已匹配部分的最长真后缀（且是词库中某关键词前缀）对应的节点；无则指向 root
-	outLens  []int32 // 以当前状态结束的全部关键词字节长度，严格降序（自身 + 失败链继承）；nil 表示无
-	outRunes []int32 // 折叠自动机专用：与 outLens 平行的关键词 rune 数；精确自动机恒 nil（见 runeStartBack）
+// ---------------------------------------------------------------------------
+// 节点定义：两套自动机各自独立，仅布局约定（base/count/fail + 降序输出数组）
+// 与转移查找共用；命中起点计算（nodeAPI.start）分别实现。
+// ---------------------------------------------------------------------------
+
+// exactNode 是精确自动机的查询期状态：outLens 为以当前状态结束的全部关键词
+// 字节长度，严格降序（自身 + 失败链继承；自身必为真后缀关键词的最长者）；
+// nil 表示无输出。命中起点 = pos − 关键词字节长（文本消耗恒等于关键词字节长）。
+type exactNode struct {
+	base    int32   // 自有边区间在 transKeys/transVals 中的起始下标
+	count   int32   // 自有边条数
+	fail    int32   // 失败指针：已匹配部分的最长真后缀（且是词库中某关键词前缀）对应的节点；无则指向 root
+	outLens []int32 // 全部输出关键词字节长，严格降序；nil 表示无
 }
 
-// builder 聚集构建期状态：root 即 nodes[0]（下标 0 = root，其余节点从 1 起，
-// 与成品 Matcher.nodes 下标完全一致），root 的 children map 成品直接复用为
-// Matcher.rootNext，兼任跳跃判断集。
+func (n exactNode) seg() (base, count, fail int32) { return n.base, n.count, n.fail }
+func (n exactNode) outs() int                      { return len(n.outLens) }
+func (n exactNode) start(_ string, pos, i int) int { return pos - int(n.outLens[i]) }
+
+// foldNode 是折叠自动机的查询期状态：outRunes 为以当前状态结束的全部关键词
+// rune 数，严格降序且无重复（自身 + 失败链继承；同节点多个折叠变体关键词
+// 只保留一条）。命中起点 = 从 pos 按 rune 数向前回退（轨道成员字节宽可不同，
+// 关键词字节长不可直接用作文本消耗，见 runeStartBack）。
+type foldNode struct {
+	base     int32   // 同 exactNode
+	count    int32   // 同 exactNode
+	fail     int32   // 同 exactNode
+	outRunes []int32 // 全部输出关键词 rune 数，严格降序无重复；nil 表示无
+}
+
+func (n foldNode) seg() (base, count, fail int32) { return n.base, n.count, n.fail }
+func (n foldNode) outs() int                      { return len(n.outRunes) }
+func (n foldNode) start(text string, pos, i int) int {
+	return runeStartBack(text, pos, int(n.outRunes[i]))
+}
+
+// ---------------------------------------------------------------------------
+// 精确自动机构建
+// ---------------------------------------------------------------------------
+
+// builder 聚集精确构建期状态：root 即 nodes[0]（下标 0 = root，其余节点从 1 起，
+// 与成品 nodes 下标完全一致），root 的 children map 成品直接复用为 rootNext，
+// 兼任跳跃判断集。
 // 注意：insert 阶段会 append 扩容 nodes，底层数组可能重新分配，故不可跨
 // append 缓存 &b.nodes[i]，一律按下标访问（BFS/flatten 阶段不再 append，
 // 局部指针安全）。
@@ -103,7 +131,7 @@ func (b *builder) buildAutomaton() {
 // flatten 把 trie 边一次性展平为全局 CSR 有序数组：每个非 root 节点收集
 // 孩子键、排序后追加进 keys/vals，记录 base/count。root 的表不进 CSR
 // （成品以 map 形式直接复用，兼任跳跃判断集）。
-func (b *builder) flatten() ([]node, []rune, []int32) {
+func (b *builder) flatten() ([]exactNode, []rune, []int32) {
 	total := 0
 	for i := range b.nodes {
 		if i > 0 {
@@ -112,7 +140,7 @@ func (b *builder) flatten() ([]node, []rune, []int32) {
 	}
 	keys := make([]rune, 0, total)
 	vals := make([]int32, 0, total)
-	nodes := make([]node, len(b.nodes))
+	nodes := make([]exactNode, len(b.nodes))
 	for i := range b.nodes {
 		if i == 0 {
 			continue // root 走 map，不进 CSR
@@ -139,7 +167,39 @@ func (b *builder) flatten() ([]node, []rune, []int32) {
 	return nodes, keys, vals
 }
 
-// ---------- 折叠自动机（WithCaseFold 惰性构建，见 Matcher.resolve） ----------
+// setFilterBit 把 rune r 的 UTF-8 首字节置入字节过滤器（r 为合法关键词 rune，
+// 编码必为 1–4 字节）。
+func setFilterBit(bf *[32]byte, r rune) {
+	var buf [utf8.UTFMax]byte
+	utf8.EncodeRune(buf[:], r)
+	bf[buf[0]>>3] |= 1 << (buf[0] & 7)
+}
+
+// buildExact 从去重后的关键词列表构建精确自动机。
+func buildExact(keywords []string) *exactMatcher {
+	b := newBuilder(len(keywords))
+	em := &exactMatcher{}
+	for _, kw := range keywords {
+		cur := int32(0)
+		for _, r := range kw {
+			cur = b.insert(cur, r)
+		}
+		b.nodes[cur].termLen = int32(len(kw)) // 终止标记：关键词字节长度
+		// 收集词库首字符字节集：首 rune 的 UTF-8 首字节（见 skipForward）
+		for _, r := range kw {
+			setFilterBit(&em.byteFilter, r)
+			break
+		}
+	}
+	b.buildAutomaton()
+	em.nodes, em.transKeys, em.transVals = b.flatten()
+	em.rootNext = b.nodes[0].children
+	return em
+}
+
+// ---------------------------------------------------------------------------
+// 折叠自动机构建（SimpleFold 轨道语义，见 WithCaseFold）
+// ---------------------------------------------------------------------------
 
 // foldKey 返回 rune r 折叠轨道的规范代表（轨道最小 rune）。SimpleFold 轨道
 // 是不相交的置换环（一般 2–3 成员），环上走一圈取最小值即可让同一轨道的
@@ -164,46 +224,39 @@ func foldOrbit(key rune) []rune {
 }
 
 // foldBuilder 构建期折叠 trie：children 以折叠代表为键，fold 相等的关键词
-// 路径共享节点（大小写变体合一），同节点可终止多个关键词（termLens 可含
+// 路径共享节点（大小写变体合一），同节点可终止多个关键词（termNrs 可含
 // 等值重复，BFS 期去重）。
 type foldBuilder struct {
-	nodes []foldNode
-	rootM *Matcher // 成品（byteFilter/rootNext 直接写入）
+	nodes []foldBuilderNode
 }
 
-// foldNode 构建期节点：children 即自有折叠边。
-type foldNode struct {
+// foldBuilderNode 构建期节点：children 即自有折叠边。
+type foldBuilderNode struct {
 	children map[rune]int32 // 键 = 折叠代表 rune
 	fail     int32
-	termLens []int32 // 插入期收集：以此状态结束的各关键词规范字节长（可重复）
-	termNrs  []int32 // 与 termLens 平行：关键词 rune 数
-	outLens  []int32 // BFS 后定型：全部输出规范字节长，严格降序（见 flushFoldTerms）
-	outRunes []int32 // 与 outLens 平行：关键词 rune 数
+	termNrs  []int32 // 插入期收集：以此状态结束的各关键词 rune 数（可重复）
+	outRunes []int32 // BFS 后定型：全部输出 rune 数，严格降序无重复（见 flushFoldTerms）
 }
 
-// buildFold 从精确自动机 m 还原关键词集并构建折叠自动机，返回独立成品
-// （folded=true）。流程与 New 相同：插词 → BFS 失败指针 → 展平 CSR；
-// 差异仅在边按折叠代表合一、失败指针按折叠匹配计算、root 表/字节过滤器/
-// CSR 键展开为全部轨道成员、输出附带关键词 rune 数。
-// 词库不在 Matcher 中留存：关键词由精确 trie 无损还原（见 trieKeywords）。
-func buildFold(m *Matcher) *Matcher {
-	kws := trieKeywords(m)
-	fm := &Matcher{folded: true}
-	b := &foldBuilder{rootM: fm, nodes: make([]foldNode, 1, len(kws)+1)}
+// buildFold 从去重后的关键词列表构建折叠自动机（New 的 fold-only 模式与
+// 首次 fold 查询的惰性构建共用）。流程与精确构建相同：插词 → BFS 失败指针
+// → 展平 CSR；差异仅在边按折叠代表合一、失败指针按折叠匹配计算、root 表/
+// 字节过滤器/CSR 键展开为全部轨道成员、输出为关键词 rune 数。
+func buildFold(keywords []string) *foldMatcher {
+	fm := &foldMatcher{}
+	b := &foldBuilder{nodes: make([]foldBuilderNode, 1, len(keywords)+1)}
 	b.nodes[0].children = make(map[rune]int32)
-	for kw := range kws {
+	for _, kw := range keywords {
 		cur := int32(0)
-		var nr, bl int32
+		var nr int32
 		for _, r := range kw {
 			cur = b.insertFold(cur, r)
 			nr++
-			bl += int32(utf8.RuneLen(foldKey(r))) // 规范宽度：同轨道成员文本侧宽度可不同
 		}
-		b.nodes[cur].termLens = append(b.nodes[cur].termLens, bl)
 		b.nodes[cur].termNrs = append(b.nodes[cur].termNrs, nr)
 	}
 	b.buildFoldAutomaton()
-	b.flattenFold()
+	b.flattenFold(fm)
 	return fm
 }
 
@@ -215,7 +268,7 @@ func (b *foldBuilder) insertFold(cur int32, r rune) int32 {
 		return t
 	}
 	t := int32(len(b.nodes))
-	b.nodes = append(b.nodes, foldNode{children: make(map[rune]int32)})
+	b.nodes = append(b.nodes, foldBuilderNode{children: make(map[rune]int32)})
 	b.nodes[cur].children[key] = t
 	return t
 }
@@ -255,57 +308,34 @@ func (b *foldBuilder) gotoFold(s int32, key rune) int32 {
 	}
 }
 
-// flushFoldTerms 定型节点 n 的输出：自身关键词（同节点重复合一）与失败链
-// 继承合并为严格降序双数组。同节点全部输出都是规范路径 σ 的后缀（自身即
-// σ 全串）：互不相同的后缀 rune 数严格递增 → 规范字节长也严格递增，故按
-// (字节长, rune 数) 降序排序并对插入期重复（如 "sS"/"ss"）去重即得严格降序。
-func (b *foldBuilder) flushFoldTerms(nd, fd *foldNode) {
-	if len(nd.termLens) == 0 {
-		nd.outLens = fd.outLens // 无自身输出时直接共享失败链切片（构建后只读）
-		nd.outRunes = fd.outRunes
+// flushFoldTerms 定型节点 n 的输出：自身关键词（折叠变体去重）与失败链继承
+// 合并为严格降序无重复的 rune 数数组。同节点全部输出都是规范路径 σ 的后缀
+// （自身即 σ 全串）：折叠代表每位置宽 ≥1 字节，rune 数更少则字节必更少，
+// 故 rune 数序与字节长序等价；按 rune 数降序排序并对重复（如 "sS"/"ss"）
+// 去重即得严格降序无重复。
+func (b *foldBuilder) flushFoldTerms(nd, fd *foldBuilderNode) {
+	if len(nd.termNrs) == 0 {
+		nd.outRunes = fd.outRunes // 无自身输出时直接共享失败链切片（构建后只读）
 		return
 	}
-	type outPair struct{ bl, nr int32 }
-	ps := make([]outPair, 0, len(nd.termLens)+len(fd.outLens))
-	for i, bl := range nd.termLens {
-		ps = append(ps, outPair{bl, nd.termNrs[i]})
-	}
-	for i, bl := range fd.outLens {
-		ps = append(ps, outPair{bl, fd.outRunes[i]})
-	}
-	slices.SortFunc(ps, func(x, y outPair) int {
-		if c := cmp.Compare(y.bl, x.bl); c != 0 {
-			return c
-		}
-		return cmp.Compare(y.nr, x.nr)
-	})
-	ps = slices.CompactFunc(ps, func(x, y outPair) bool { return x == y })
-	nd.outLens = make([]int32, len(ps))
-	nd.outRunes = make([]int32, len(ps))
-	for i, p := range ps {
-		nd.outLens[i] = p.bl
-		nd.outRunes[i] = p.nr
-	}
-}
-
-// setFilterBit 把 rune r 的 UTF-8 首字节置入字节过滤器（折叠版 New 的
-// 对应操作；r 为合法关键词 rune，编码必为 1–4 字节）。
-func (m *Matcher) setFilterBit(r rune) {
-	var buf [utf8.UTFMax]byte
-	utf8.EncodeRune(buf[:], r)
-	m.byteFilter[buf[0]>>3] |= 1 << (buf[0] & 7)
+	nrs := make([]int32, 0, len(nd.termNrs)+len(fd.outRunes))
+	nrs = append(nrs, nd.termNrs...)
+	nrs = append(nrs, fd.outRunes...)
+	slices.Sort(nrs)
+	slices.Reverse(nrs) // 降序
+	nrs = slices.Compact(nrs)
+	nd.outRunes = nrs
 }
 
 // flattenFold 展平折叠自动机：CSR 每条自有边展开为其轨道全部成员（轨道互
 // 不相交 → 段内仍严格升序，二分查找不受影响），目标指向同一节点；root 表
 // 与字节过滤器同步展开（rootNext 含全部轨道成员，skipForward 无需归一）。
-func (b *foldBuilder) flattenFold() {
-	fm := b.rootM
+func (b *foldBuilder) flattenFold(fm *foldMatcher) {
 	root := make(map[rune]int32, len(b.nodes[0].children)*2)
 	for key, t := range b.nodes[0].children {
 		for _, r := range foldOrbit(key) {
 			root[r] = t
-			fm.setFilterBit(r) // 各轨道成员的 UTF-8 首字节都置位
+			setFilterBit(&fm.byteFilter, r) // 各轨道成员的 UTF-8 首字节都置位
 		}
 	}
 	total := 0
@@ -316,7 +346,7 @@ func (b *foldBuilder) flattenFold() {
 	}
 	keys := make([]rune, 0, total)
 	vals := make([]int32, 0, total)
-	nodes := make([]node, len(b.nodes))
+	nodes := make([]foldNode, len(b.nodes))
 	for i := range b.nodes {
 		if i == 0 {
 			continue // root 走 map，不进 CSR
@@ -324,7 +354,6 @@ func (b *foldBuilder) flattenFold() {
 		bn := &b.nodes[i]
 		nd := &nodes[i]
 		nd.fail = bn.fail
-		nd.outLens = bn.outLens
 		nd.outRunes = bn.outRunes
 		if len(bn.children) == 0 {
 			continue // 叶子：count=0，查询期直接沿 fail 回退
@@ -347,16 +376,17 @@ func (b *foldBuilder) flattenFold() {
 	fm.rootNext = root
 }
 
-// trieKeywords 从成品精确自动机还原去重后的关键词集合（rune 路径拼接）。
-// 词尾判定 outLens[0] == 路径字节长：termLen 即全路径字节长，fail 链继承的
-// 真后缀严格更短，等式精确（与基准 trieFindAll 同一判据）；root 走 rootNext。
-func trieKeywords(m *Matcher) map[string]struct{} {
-	kws := make(map[string]struct{})
+// trieKeywords 从精确自动机还原去重后的关键词列表（rune 路径拼接），供
+// 惰性构建折叠自动机复用（词库不在 Matcher 中驻留）。词尾判定
+// outLens[0] == 路径字节长：termLen 即全路径字节长，fail 链继承的真后缀
+// 严格更短，等式精确（与基准 trieFindAll 同一判据）；root 走 rootNext。
+func trieKeywords(m *exactMatcher) []string {
+	var kws []string
 	var walk func(s int32, prefix []rune, bytes int)
 	walk = func(s int32, prefix []rune, bytes int) {
 		nd := &m.nodes[s]
 		if len(nd.outLens) > 0 && int(nd.outLens[0]) == bytes {
-			kws[string(prefix)] = struct{}{} // string() 拷贝前缀，DFS 复用底层数组安全
+			kws = append(kws, string(prefix)) // string() 拷贝前缀，DFS 复用底层数组安全
 		}
 		if s == 0 {
 			for r, t := range m.rootNext {

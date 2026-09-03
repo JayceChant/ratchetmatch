@@ -9,12 +9,15 @@
 // 起始的文本段。
 //
 // 匹配语义为非重叠最左最长：起点最小者优先，同一起点取完整出现的最长关键
-// 词（真包含关系一律输出最长）。Matcher 构建完成后为只读数据结构（除 root
-// 首字符表外无 map，查询期零分配），可无锁并发使用。
+// 词（真包含关系一律输出最长）。
 //
-// Find 系列均带变参 opts ...Option：不传即精确匹配（默认行为）；传
-// WithCaseFold 时按 Unicode SimpleFold 轨道折叠匹配，折叠自动机在首次
-// fold 查询时惰性构建（一次性，之后只读，并发安全），详见 WithCaseFold。
+// 内部为两套独立自动机：精确（exactMatcher）与折叠（foldMatcher，SimpleFold
+// 轨道语义），共用同一套泛型扫描引擎（machine，见 search.go），命中区间
+// 提取的差异由节点类型分别实现。对外统一收敛在导出的 Matcher 上：
+//   - New(keywords)：仅构建精确自动机；折叠自动机在首次 WithCaseFold 查询
+//     时惰性构建（一次性，之后只读，并发安全）；
+//   - New(keywords, WithCaseFold())：仅构建折叠自动机（fold-only），后续所有
+//     查询固定按折叠语义执行且无法关闭。
 package ratchetmatch
 
 import (
@@ -26,62 +29,70 @@ import (
 )
 
 // Match 表示一次关键词命中。Start/End 为 text 中的字节偏移，
-// [Start,End) 半开区间，且 text[Start:End] == Keyword。
+// [Start,End) 半开区间，且 text[Start:End] == Keyword（fold 查询时 Keyword
+// 为文本原样切片，即实际命中的大小写形态）。
 type Match struct {
 	Start   int
 	End     int
 	Keyword string
 }
 
-// Matcher 是构建完成的多模式匹配自动机（node 定义在 build.go）。
-// 转移表为全局 CSR 数组（transKeys/transVals 按节点 base/count 区间分段），
-// 构建后只读，可无锁并发使用。
+// Matcher 是构建完成的多模式匹配自动机，内部持有两套私有自动机实现：
+// exact 精确自动机（New 默认构建）、fold 折叠自动机（fold-only 模式在
+// New 时构建，否则首次 WithCaseFold 查询经 once 惰性构建一次）。两套
+// 自动机构建完成后均只读，可无锁并发使用。
 type Matcher struct {
-	nodes      []node
-	transKeys  []rune         // 全局转移表：仅自有 trie 边，段内 rune 升序，段与节点一一对应
-	transVals  []int32        // 全局转移表：与 transKeys 平行的转移目标（恒非 0）
-	rootNext   map[rune]int32 // root 的转移表 = 词库首字符表，兼任跳跃判断集（见 skipForward）
-	byteFilter [32]byte
-
-	// fold 惰性子结构（仅 WithCaseFold 查询使用）：首次 fold 查询时构建
-	// 一次，之后只读。froot 是独立完整自动机（节点表/CSR/首字符表/过滤器），
-	// 查询热路径与精确模式共用同一套代码。
-	once   sync.Once
-	froot  *Matcher
-	folded bool // 本实例为折叠自动机（经 buildFold 构建，命中区间按 rune 数回退）
+	exact    *exactMatcher // 精确自动机；fold-only 构建时为 nil
+	fold     *foldMatcher  // 折叠自动机；未构建时为 nil
+	once     sync.Once     // 串行化惰性构建（仅精确模式使用）
+	foldOnly bool          // New(WithCaseFold)：所有查询固定走 fold，无法关闭
 }
 
-// Option 定制一次 Find 系列查询的行为。零值不改变默认行为。
+// Option 定制 New 与 Find 系列调用的行为。零值不改变默认行为。
 type Option func(*queryOpts)
 
-// queryOpts 聚合一次查询的全部选项（变参展开结果）。
+// queryOpts 聚合一次调用的全部选项（变参展开结果）。
 type queryOpts struct {
 	caseFold bool
 }
 
-// WithCaseFold 使本次查询按 Unicode SimpleFold 轨道折叠匹配（strings.EqualFold
-// 语义）：文本 rune 与关键词 rune fold 相等即视为同一字符，"Hello" 可命中
-// 关键词 "hello"。大小写变体关键词在折叠自动机中合一，不漏报。
+// WithCaseFold 启用大小写折叠匹配（strings.EqualFold 语义：逐 rune 的
+// SimpleFold 轨道等价），"Hello" 可命中关键词 "hello"。大小写变体关键词
+// 在折叠自动机中合一，不漏报；无展开式折叠（ß 不匹配 ss）。
 //
-// 折叠自动机在首次 fold 查询时在同一 Matcher 内惰性构建（一次性，此后只读，
-// 并发 fold 查询经 sync.Once 串行等待）；精确查询不受任何影响。命中区间的
-// Keyword 为文本原样切片（如关键词 "hello" 命中文本 "Hello" 时 Keyword 为
-// "Hello"），Start/End 仍可直接切文本。
+// 用法一（惰性）：m, _ := New(kws); m.FindAll(text, WithCaseFold())——首次
+// fold 查询在同一 Matcher 内构建折叠自动机（一次性，之后只读，并发 fold
+// 查询经 sync.Once 串行等待），精确查询不受任何影响。
+// 用法二（fold-only）：m, _ := New(kws, WithCaseFold())——仅构建折叠自动机，
+// 后续所有查询（含不传选项的）固定按折叠语义执行且无法关闭；精确查询需求
+// 另建 Matcher。选项对象建议提升为包级变量复用（如 var fold =
+// ratchetmatch.WithCaseFold()），避免每次调用分配闭包。
+// 命中区间的 Keyword 为文本原样切片（如关键词 "hello" 命中文本 "Hello" 时
+// Keyword 为 "Hello"），Start/End 仍可直接切文本。
 func WithCaseFold() Option {
 	return func(o *queryOpts) { o.caseFold = true }
 }
 
-// resolve 展开变参选项；fold 查询返回惰性构建（仅首次）的折叠自动机。
-func (m *Matcher) resolve(opts []Option) *Matcher {
+// wantsFold 判定一次变参调用是否要求折叠语义。
+func wantsFold(opts []Option) bool {
 	var o queryOpts
 	for _, opt := range opts {
 		opt(&o)
 	}
-	if !o.caseFold {
-		return m
-	}
-	m.once.Do(func() { m.froot = buildFold(m) })
-	return m.froot
+	return o.caseFold
+}
+
+// foldEngine 返回折叠自动机；惰性模式下首次调用构建一次（并发安全，其它
+// goroutine 等待构建完成后共同使用只读结果）。构建必须无条件经 once.Do：
+// Once 的快速路径自身原子且提供 happens-before，绕过它读 m.fold 会引入
+// 数据竞争。词库由精确 trie 无损还原（trieKeywords），不在 Matcher 中驻留。
+func (m *Matcher) foldEngine() *foldMatcher {
+	m.once.Do(func() {
+		if m.fold == nil { // fold-only 构建的 Matcher 不会走到这里，防御兜底
+			m.fold = buildFold(trieKeywords(m.exact))
+		}
+	})
+	return m.fold
 }
 
 // New 根据关键词列表构建 Matcher。
@@ -92,7 +103,11 @@ func (m *Matcher) resolve(opts []Option) *Matcher {
 // 前进不一致（长度歧义），二者均会使命中区间或关键词身份失去健全语义，
 // 故显式拒绝（详见 spec 词库校验需求）。文本侧的非法字节不受影响，
 // 扫描时按 RuneError 逐字节处理，不 panic、不漏扫。
-func New(keywords []string) (*Matcher, error) {
+//
+// opts 可传 WithCaseFold：此时仅构建折叠自动机（fold-only），后续所有查询
+// 固定按折叠语义执行且无法关闭；不传则仅构建精确自动机，折叠自动机留待
+// 首次 WithCaseFold 查询时惰性构建（见 WithCaseFold）。
+func New(keywords []string, opts ...Option) (*Matcher, error) {
 	if len(keywords) == 0 {
 		return nil, errors.New("ratchetmatch: keyword list is empty")
 	}
@@ -108,35 +123,56 @@ func New(keywords []string) (*Matcher, error) {
 		}
 	}
 	seen := make(map[string]struct{}, len(keywords)) // 构建期临时去重表
-	b := newBuilder(len(keywords))
-	m := &Matcher{}
+	kws := make([]string, 0, len(keywords))
 	for _, kw := range keywords {
 		if _, dup := seen[kw]; dup {
 			continue
 		}
 		seen[kw] = struct{}{}
-		cur := int32(0)
-		for _, r := range kw {
-			cur = b.insert(cur, r)
-		}
-		b.nodes[cur].termLen = int32(len(kw)) // 终止标记：关键词字节长度
-		// 收集词库首字符字节集（256 位位图），跳跃用（见 skipForward）。
-		m.byteFilter[kw[0]>>3] |= 1 << (kw[0] & 7)
+		kws = append(kws, kw)
 	}
-	b.buildAutomaton()
-	m.nodes, m.transKeys, m.transVals = b.flatten()
-	m.rootNext = b.nodes[0].children
-	return m, nil
+	if wantsFold(opts) {
+		return &Matcher{fold: buildFold(kws), foldOnly: true}, nil
+	}
+	return &Matcher{exact: buildExact(kws)}, nil
 }
 
-// FindAll 返回 text 中所有命中（非重叠最左最长：起点最小优先；同一起点前缀关系取最长），
-// 按出现先后（Start 升序）排序；无命中或 text 为空返回 nil。
+// FindAll 返回 text 中所有命中（非重叠最左最长：起点最小优先；同一起点前缀
+// 关系取最长），按出现先后（Start 升序）排序；无命中或 text 为空返回 nil。
 // opts 可传 WithCaseFold 启用大小写折叠匹配（见 WithCaseFold）。
 func (m *Matcher) FindAll(text string, opts ...Option) []Match {
-	var out []Match
-	m.resolve(opts).scan(text, 0, func(hit Match) bool {
-		out = append(out, hit)
-		return true
-	})
-	return out
+	if m.foldOnly || wantsFold(opts) {
+		return m.foldEngine().findAll(text)
+	}
+	return m.exact.findAll(text)
+}
+
+// FindAllOverlapping 返回 text 中全部关键词出现（含互相重叠者），服务词频
+// 统计、关键词提取、索引构建等场景：每个（关键词，出现位置）输出一次，
+// 不做非重叠筛选。输出按 End 升序、同一 End 按关键词长度降序（单遍扫描的
+// 天然产出序，与 FindAll 的 Start 升序不同序）。无命中或 text 为空返回 nil。
+//
+// 开销输出敏感：时间 O(n + K)、空间 O(K)，K 为总出现数——病态词库
+// （大量互为后缀的词）配高频文本时 K 可达 O(n·m)，调用方自行评估规模。
+// 不提供对应的 FindNext 版本：重叠语义与「从 offset 重扫的无状态迭代」
+// 不合，返回一条命中后无法不重扫地枚举与其重叠的更早出现（见 spec Non-Goals）。
+// opts 可传 WithCaseFold 启用大小写折叠匹配（见 WithCaseFold）。
+func (m *Matcher) FindAllOverlapping(text string, opts ...Option) []Match {
+	if m.foldOnly || wantsFold(opts) {
+		return m.foldEngine().findAllOverlapping(text)
+	}
+	return m.exact.findAllOverlapping(text)
+}
+
+// FindNext 从 offset（字节偏移）开始查找第一个命中，找到即终止扫描、不遍历
+// 剩余文本，适合超长文本按需查找。无状态，可并发调用；调用方用返回的 End
+// 作下次 offset 迭代，得到的序列与 FindAll 完全一致（首条命中即 FindAll 的
+// 第一条）。无命中返回 (Match{}, false)。offset<0 按 0 处理；
+// offset>=len(text) 返回 false；offset 落在多字节字符中间时向后对齐到 rune
+// 边界。opts 可传 WithCaseFold 启用大小写折叠匹配（见 WithCaseFold）。
+func (m *Matcher) FindNext(text string, offset int, opts ...Option) (Match, bool) {
+	if m.foldOnly || wantsFold(opts) {
+		return m.foldEngine().findNext(text, offset)
+	}
+	return m.exact.findNext(text, offset)
 }

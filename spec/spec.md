@@ -17,17 +17,22 @@
 
 ### Requirement: caseFold 查询（WithCaseFold 变参选项）
 
-Find 系列接受变参 `opts ...Option`，`WithCaseFold() Option` 使本次查询按 Unicode SimpleFold 轨道折叠语义匹配（`strings.EqualFold` 等价：文本 rune 与关键词 rune fold 相等即匹配）。默认变参为空 = 精确匹配，行为与本 Requirement 引入前完全一致：
+`New` 与 Find 系列均接受变参 `opts ...Option`，`WithCaseFold() Option` 使匹配按 Unicode SimpleFold 轨道折叠语义进行（`strings.EqualFold` 等价：文本 rune 与关键词 rune fold 相等即匹配）。变参为空 = 精确匹配，行为与本 Requirement 引入前完全一致：
 
-- **折叠自动机构建期生成、查询期惰性构建**：`New` 只建精确自动机；首次 fold 查询时在同一 `Matcher` 内同步构建折叠自动机（一次性、此后只读，`sync.Once` 保证并发安全，其它 goroutine 等待构建完成），可并发调用
-- 构建语义：关键词按 rune 序插入，fold 轨道等价的边复用同一目标节点（fold-equal 兄弟分支天然合一，outLens 为折叠等价关键词的并集）；构建期失败指针按折叠匹配计算；`rootNext`/`byteFilter`/CSR 边 key 均展开为各 rune 的全部 SimpleFold 轨道成员（轨道互不相交，每轨道成员数 ≤4，词库规模膨胀为常数倍）——查询热路径（step/find/skipForward 逻辑）与精确模式完全共用，代码零分支
+- **折叠自动机构建期生成**：fold-equal 的边在插入时合一（共享目标节点，outLens 为折叠等价关键词的并集）——查询期在同一精确自动机上换 EqualFold 比较不可行（折叠冲突的兄弟分支只走其一，必漏报变体词典）
+- **两种构建模式**（2026-09-03 修订，用户定夺）：
+  - `New(keywords)`（默认）：仅构建精确自动机；首次 fold 查询时在同一 `Matcher` 内惰性构建折叠自动机（一次性、此后只读，`sync.Once` 保证并发安全），词库由精确 trie 无损还原（trieKeywords：词尾判据 outLens[0] == 路径字节长），不在 Matcher 中驻留
+  - `New(keywords, WithCaseFold())`（fold-only）：仅构建折叠自动机（精确成员为 nil），后续所有查询固定按折叠语义执行且无法关闭
+- **内部结构**：两套私有自动机 exactMatcher（exactNode：outLens 字节长）/ foldMatcher（foldNode：outRunes 关键词 rune 数）共用泛型扫描引擎 machine[N]（step/find/skipForward/scan/链归并单一实现，节点约束接口承载命中起点计算差异；exactNode/foldNode 布局不同 → gcshape 各自单态化，热路径零接口开销）；对外统一收敛在导出的 Matcher（exact/fold/once/foldOnly 字段）
+- **首字符筛选 = 轨道展开**：rootNext/byteFilter/CSR 边 key 均展开为各 rune 的全部 SimpleFold 轨道成员（轨道互不相交、每轨道成员数 ≤4，词库规模膨胀为常数倍）——CSR 段内仍严格升序（二分/线性查找零改动），skipForward 判据不变，查询热路径与精确模式完全共用、零分支零归一
 - 匹配语义（FindAll / FindAllOverlapping / FindNext）与精确模式逐条对应：非重叠最左最长、End 升序全量、首命中即停，均以折叠等价替换精确相等；**同一 Matcher 的 fold 查询输出 ≡ 先把词库全部折叠归一去重、再按同等最左最长语义对折叠后文本扫描的结果**（等价 oracle 见测试）
-- **命中区间按文本侧实际消耗提取**：fold 轨道成员 UTF-8 宽度可不同（如 K U+212A 3 字节 vs k 1 字节），outLens 的字节长不可直接回退起点；fold 自动机的输出改存（关键词 rune 数, 关键词折叠轨道代表字节长），命中时按 rune 数从 End 向前走 rune 边界提取 Start，`Match.Keyword = text[Start:End]`（文本原样切片，非关键词原件——同一关键词可折叠匹配出多种大小写形态）
-- fold 匹配按逐 rune SimpleFold 比较：文本非法字节按 RuneError 处理（不在任何折叠轨道，等同精确模式）；文本合法 rune 折叠到 RuneError 不可能（RuneError 无折叠轨道伙伴）；SimpleFold 不做多 rune 展开（ß→ss）——关键词含 ß 时只匹配含 ß 的文本
-- fold 模式下 BM 跳跃安全性：折叠自动机首字符集已含全部轨道成员，root 态跳跃判据（起始 rune 必在首字符集）不变；未展开轨道前的 rune 不会成为合法起始
+- **命中区间按文本侧实际消耗提取**：fold 轨道成员 UTF-8 宽度可不同（如 K U+212A 3 字节 vs k 1 字节），字节长不可直接回退起点；fold 自动机输出存关键词 rune 数，命中时按 rune 数从 End 向前走 rune 边界提取 Start，`Match.Keyword = text[Start:End]`（文本原样切片，非关键词原件——同一关键词可折叠匹配出多种大小写形态）
+- fold 匹配按逐 rune SimpleFold 比较：文本非法字节按 RuneError 处理（不在任何折叠轨道，等同精确模式）；SimpleFold 不做多 rune 展开（ß→ss）——关键词含 ß 时只匹配含 ß 的文本
+- fold 模式下 BM 跳跃安全性：折叠自动机首字符集已含全部轨道成员，root 态跳跃判据（起始 rune 必在首字符集）不变
 
 #### Scenario: fold 查询
 - **WHEN** `m, _ := New([]string{"hello","世界"}); m.FindAll("Hello, WORLD! 世界", WithCaseFold())` **THEN** 命中 `Hello`(0,5) 与 `世界`(14,20)；不带选项调用同词库同文本仅命中 `世界`
+- **WHEN** `m, _ := New([]string{"hello","世界"}, WithCaseFold()); m.FindAll("Hello, WORLD! 世界")`（fold-only，不传选项）**THEN** 结果与惰性模式 fold 查询完全一致
 - **WHEN** 词库 {"Stop","stop"}，文本 "SToP sTop"（fold 查询）**THEN** 两处均命中（精确查询漏报其一——同节点不可能走两条分支，构建期合一即修复）
 - **WHEN** 词库 {"K"}（U+212A 开尔文度），文本 "k K"（fold 查询）**THEN** 命中 k(0,1) 与 K(2,5)：区间按文本侧宽度提取，Keyword 为文本切片
 - **WHEN** 并发 8 goroutine 混合 fold / 精确查询同一 Matcher **THEN** `-race` 通过，fold 首次构建仅发生一次

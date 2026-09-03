@@ -136,11 +136,12 @@ func TestNewValidation(t *testing.T) {
 	// 中的 "世"(你→好→世) 是不同节点：root + 你/你好/好世/好世界/世/界 共 7 个；
 	// root 首字符表恰为 {你,世} 2 个（词首字符去重）；root 不进 CSR（走 map）。
 	m := mustNew(t, []string{"你好", "世界", "你好世界"})
-	if len(m.nodes) != 7 {
-		t.Errorf("白盒: trie 节点数 = %d, 期望 7", len(m.nodes))
+	em := m.exact
+	if len(em.nodes) != 7 {
+		t.Errorf("白盒: trie 节点数 = %d, 期望 7", len(em.nodes))
 	}
-	if len(m.rootNext) != 2 {
-		t.Errorf("白盒: root 首字符表大小 = %d, 期望 2", len(m.rootNext))
+	if len(em.rootNext) != 2 {
+		t.Errorf("白盒: root 首字符表大小 = %d, 期望 2", len(em.rootNext))
 	}
 }
 
@@ -156,28 +157,29 @@ func TestNewValidation(t *testing.T) {
 //   - root 首字符表与各关键词首 rune 集一致（跳跃判据正确性前提）。
 func TestCSRLayout(t *testing.T) {
 	m := mustNew(t, benchKeywordsSparse)
-	if len(m.transKeys) != len(m.transVals) {
-		t.Fatalf("transKeys(%d) 与 transVals(%d) 长度不一致", len(m.transKeys), len(m.transVals))
+	em := m.exact
+	if len(em.transKeys) != len(em.transVals) {
+		t.Fatalf("transKeys(%d) 与 transVals(%d) 长度不一致", len(em.transKeys), len(em.transVals))
 	}
-	if m.nodes[0].base != 0 || m.nodes[0].count != 0 {
-		t.Fatalf("root 不应有 CSR 区间: base=%d count=%d", m.nodes[0].base, m.nodes[0].count)
+	if em.nodes[0].base != 0 || em.nodes[0].count != 0 {
+		t.Fatalf("root 不应有 CSR 区间: base=%d count=%d", em.nodes[0].base, em.nodes[0].count)
 	}
-	for i := 1; i < len(m.nodes); i++ {
-		nd := &m.nodes[i]
-		if nd.count < 0 || nd.base < 0 || int(nd.base+nd.count) > len(m.transKeys) {
-			t.Fatalf("节点 %d 区间非法: base=%d count=%d（总长 %d）", i, nd.base, nd.count, len(m.transKeys))
+	for i := 1; i < len(em.nodes); i++ {
+		nd := &em.nodes[i]
+		if nd.count < 0 || nd.base < 0 || int(nd.base+nd.count) > len(em.transKeys) {
+			t.Fatalf("节点 %d 区间非法: base=%d count=%d（总长 %d）", i, nd.base, nd.count, len(em.transKeys))
 		}
 		for j := nd.base + 1; j < nd.base+nd.count; j++ {
-			if m.transKeys[j-1] >= m.transKeys[j] {
-				t.Fatalf("节点 %d 区间键非严格升序: keys[%d]=%U >= keys[%d]=%U", i, j-1, m.transKeys[j-1], j, m.transKeys[j])
+			if em.transKeys[j-1] >= em.transKeys[j] {
+				t.Fatalf("节点 %d 区间键非严格升序: keys[%d]=%U >= keys[%d]=%U", i, j-1, em.transKeys[j-1], j, em.transKeys[j])
 			}
 		}
 		for j := nd.base; j < nd.base+nd.count; j++ {
-			if to := m.transVals[j]; to <= 0 || int(to) >= len(m.nodes) {
-				t.Fatalf("节点 %d 转移目标非法: vals[%d]=%d（节点总数 %d）", i, j, to, len(m.nodes))
+			if to := em.transVals[j]; to <= 0 || int(to) >= len(em.nodes) {
+				t.Fatalf("节点 %d 转移目标非法: vals[%d]=%d（节点总数 %d）", i, j, to, len(em.nodes))
 			}
 		}
-		if nd.fail < 0 || int(nd.fail) >= len(m.nodes) {
+		if nd.fail < 0 || int(nd.fail) >= len(em.nodes) {
 			t.Fatalf("节点 %d 失败指针非法: fail=%d", i, nd.fail)
 		}
 	}
@@ -189,17 +191,17 @@ func TestCSRLayout(t *testing.T) {
 			break
 		}
 	}
-	if len(m.rootNext) != len(firsts) {
-		t.Fatalf("root 首字符表大小 %d 与词库首字符集 %d 不一致", len(m.rootNext), len(firsts))
+	if len(em.rootNext) != len(firsts) {
+		t.Fatalf("root 首字符表大小 %d 与词库首字符集 %d 不一致", len(em.rootNext), len(firsts))
 	}
 	for r := range firsts {
-		if _, ok := m.rootNext[r]; !ok {
+		if _, ok := em.rootNext[r]; !ok {
 			t.Fatalf("root 首字符表缺少词首字符 %U", r)
 		}
 	}
 	// outLens 严格降序不变量（同状态多关键词时链规则「同起点取更长」的前提）
-	for i := range m.nodes {
-		ls := m.nodes[i].outLens
+	for i := range em.nodes {
+		ls := em.nodes[i].outLens
 		for j := 1; j < len(ls); j++ {
 			if ls[j-1] <= ls[j] {
 				t.Fatalf("节点 %d outLens 非严格降序: [%d]=%d <= [%d]=%d", i, j-1, ls[j-1], j, ls[j])
@@ -217,24 +219,25 @@ func TestCSRLayout(t *testing.T) {
 func TestAutomatonSemantics(t *testing.T) {
 	kws := benchKeywordsSparse
 	m := mustNew(t, kws)
+	em := m.exact
 
 	// DFS 还原每个节点的路径字符串（root 为空串，不入表）
-	paths := make([]string, len(m.nodes))
+	paths := make([]string, len(em.nodes))
 	type frame struct {
 		node int32
 		path string
 	}
-	stack := make([]frame, 0, len(m.nodes))
-	for r, c := range m.rootNext {
+	stack := make([]frame, 0, len(em.nodes))
+	for r, c := range em.rootNext {
 		stack = append(stack, frame{c, string(r)})
 	}
 	for len(stack) > 0 {
 		f := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		paths[f.node] = f.path
-		nd := &m.nodes[f.node]
+		nd := &em.nodes[f.node]
 		for j := nd.base; j < nd.base+nd.count; j++ {
-			stack = append(stack, frame{m.transVals[j], f.path + string(m.transKeys[j])})
+			stack = append(stack, frame{em.transVals[j], f.path + string(em.transKeys[j])})
 		}
 	}
 	// 前缀 → 节点下标（Trie 是树，路径与节点一一对应；root 空串不参与后缀匹配）
@@ -250,7 +253,7 @@ func TestAutomatonSemantics(t *testing.T) {
 	}
 
 	// fail 指针：最长真后缀（且是词库前缀）
-	for i := 1; i < len(m.nodes); i++ {
+	for i := 1; i < len(em.nodes); i++ {
 		rs := []rune(paths[i])
 		want := int32(0)
 		for k := len(rs) - 1; k > 0; k-- {
@@ -259,14 +262,14 @@ func TestAutomatonSemantics(t *testing.T) {
 				break
 			}
 		}
-		if m.nodes[i].fail != want {
+		if em.nodes[i].fail != want {
 			t.Fatalf("节点 %d（%q）fail = %d，期望最长真后缀前缀节点 %d",
-				i, paths[i], m.nodes[i].fail, want)
+				i, paths[i], em.nodes[i].fail, want)
 		}
 	}
 
 	// outLens：路径的关键词后缀长度集合，降序
-	for i := 1; i < len(m.nodes); i++ {
+	for i := 1; i < len(em.nodes); i++ {
 		var want []int32
 		for _, kw := range kws {
 			if strings.HasSuffix(paths[i], kw) {
@@ -275,9 +278,9 @@ func TestAutomatonSemantics(t *testing.T) {
 		}
 		slices.Sort(want)
 		slices.Reverse(want) // 降序
-		if !slices.Equal(m.nodes[i].outLens, want) {
+		if !slices.Equal(em.nodes[i].outLens, want) {
 			t.Fatalf("节点 %d（%q）outLens = %v，期望关键词后缀长度降序 %v",
-				i, paths[i], m.nodes[i].outLens, want)
+				i, paths[i], em.nodes[i].outLens, want)
 		}
 	}
 
@@ -287,7 +290,7 @@ func TestAutomatonSemantics(t *testing.T) {
 		firstBytes[kw[0]] = struct{}{}
 	}
 	for b := range 256 {
-		set := m.byteFilter[b>>3]&(1<<(b&7)) != 0
+		set := em.byteFilter[b>>3]&(1<<(b&7)) != 0
 		_, want := firstBytes[byte(b)]
 		if set != want {
 			t.Fatalf("字节 0x%02X 过滤器位 = %v，期望 %v", b, set, want)
@@ -305,11 +308,12 @@ func TestFindBinaryBranch(t *testing.T) {
 		kws = append(kws, prefix+string(s))
 	}
 	m := mustNew(t, kws)
+	em := m.exact
 	// 前置白盒断言：P 节点确实宽于 16，扫描将走二分分支
-	pNode := int(m.rootNext['P'])
-	if len(m.rootNext) != 1 || m.nodes[pNode].count <= 16 {
+	pNode := int(em.rootNext['P'])
+	if len(em.rootNext) != 1 || em.nodes[pNode].count <= 16 {
 		t.Fatalf("前置条件不满足：root 首字符 %d 个，P 节点 count=%d（需 >16）",
-			len(m.rootNext), m.nodes[pNode].count)
+			len(em.rootNext), em.nodes[pNode].count)
 	}
 	// 每个词独立命中
 	for _, s := range suffixes {

@@ -258,13 +258,14 @@ func collectLeftmostLongest(text string, occs []interval) []Match {
 // 节点不存 termLen，而 outLens 严格降序、首元素即自身词长（fail 链继承的
 // 真后缀关键词严格更短），该等式成立当且仅当路径节点是词尾。
 func trieFindAll(m *Matcher, text string) []Match {
+	em := m.exact // 纯 Trie 参照只关心精确自动机的 trie 结构
 	n := len(text)
 	pos := 0
 	var out []Match
 	for pos < n {
 		// 从 root 起尝试一条 trie 路径：起点 rune 无对应边则跳过一个 rune
 		r, startSize := utf8.DecodeRuneInString(text[pos:])
-		node, ok := m.rootNext[r]
+		node, ok := em.rootNext[r]
 		if !ok {
 			pos += startSize
 			continue
@@ -272,14 +273,14 @@ func trieFindAll(m *Matcher, text string) []Match {
 		p := pos + startSize // 起点 rune 已消费为路径首步
 		end := -1            // 当前路径上最后一个词尾位置（-1 表示无完整命中）
 		for {
-			if lens := m.nodes[node].outLens; len(lens) > 0 && int(lens[0]) == p-pos {
+			if lens := em.nodes[node].outLens; len(lens) > 0 && int(lens[0]) == p-pos {
 				end = p // 词尾判定：outLens[0] 恰为自身词长（见函数注释）
 			}
-			if m.nodes[node].count == 0 || p >= n {
+			if em.nodes[node].count == 0 || p >= n {
 				break // 叶子或文本耗尽：路径终止
 			}
 			r, size := utf8.DecodeRuneInString(text[p:])
-			next := m.find(node, r)
+			next := em.find(node, r)
 			if next == 0 {
 				break // 失配：路径终止（无 fail 链，不回退）
 			}

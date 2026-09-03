@@ -207,6 +207,14 @@ func FuzzMatch(f *testing.F) {
 			t.Fatalf("FindAll(fold) 与贪心 oracle 不一致（词库 %q, 文本 %q）\ngot:  %v\nwant: %v",
 				kws, s, foldAll, wantFoldAll)
 		}
+		// --- fold-only Matcher 与惰性构建的 fold 结果一致 ---
+		mo, err := New(kws, WithCaseFold())
+		if err != nil {
+			t.Fatalf("New(fold-only) 意外失败: %v", err)
+		}
+		if !slices.Equal(mo.FindAll(s), foldAll) {
+			t.Fatalf("fold-only FindAll 与惰性 fold 不一致（词库 %q, 文本 %q）", kws, s)
+		}
 		// --- fold：FindNext 迭代 == FindAll；任意 offset == 后缀首条平移 ---
 		var foldIter []Match
 		for off := 0; ; {
