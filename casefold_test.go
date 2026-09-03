@@ -91,61 +91,63 @@ func TestCaseFoldSemantics(t *testing.T) {
 		wantFold  []Match // 折叠 Matcher 的 FindAll
 		wantExact []Match // 精确 Matcher 的 FindAll
 	}{
+		// 组号说明：fold 模式词身份为折叠归一形（去重词库下标），exact 为
+		// 原词库下标——两套 Matcher 的组号空间彼此独立。
 		{
 			name:      "ASCII 大小写",
 			keywords:  []string{"hello", "世界"},
 			text:      "Hello, WORLD! 世界",
-			wantFold:  []Match{{0, 5, "Hello"}, {14, 20, "世界"}},
-			wantExact: []Match{{14, 20, "世界"}},
+			wantFold:  []Match{{Start: 0, End: 5, Keyword: "Hello"}, {Start: 14, End: 20, Keyword: "世界", Group: 1}},
+			wantExact: []Match{{Start: 14, End: 20, Keyword: "世界", Group: 1}},
 		},
 		{
 			name:      "词库大小写变体合一不漏报",
 			keywords:  []string{"Stop", "stop"},
 			text:      "SToP sTop",
-			wantFold:  []Match{{0, 4, "SToP"}, {5, 9, "sTop"}},
+			wantFold:  []Match{{Start: 0, End: 4, Keyword: "SToP"}, {Start: 5, End: 9, Keyword: "sTop"}}, // 归一形 stop 同组 0
 			wantExact: []Match{},
 		},
 		{
 			name:      "折叠变体关键词只出一条（outRunes 去重）",
 			keywords:  []string{"ss", "sS", "Ss", "SS"},
 			text:      "Ss",
-			wantFold:  []Match{{0, 2, "Ss"}},
-			wantExact: []Match{{0, 2, "Ss"}},
+			wantFold:  []Match{{Start: 0, End: 2, Keyword: "Ss"}}, // 归一形 ss 单词库项，组 0
+			wantExact: []Match{{Start: 0, End: 2, Keyword: "Ss", Group: 2}},
 		},
 		{
 			name:      "开尔文度宽度差按文本侧提取",
 			keywords:  []string{"\u212A"},
 			text:      "k \u212A",
-			wantFold:  []Match{{0, 1, "k"}, {2, 5, "\u212A"}},
-			wantExact: []Match{{2, 5, "\u212A"}},
+			wantFold:  []Match{{Start: 0, End: 1, Keyword: "k"}, {Start: 2, End: 5, Keyword: "\u212A"}},
+			wantExact: []Match{{Start: 2, End: 5, Keyword: "\u212A"}},
 		},
 		{
 			name:      "前缀包含折叠取最长",
 			keywords:  []string{"中国", "zhongguo", "ZhongGuo"},
 			text:      "ZHONGGUO中国",
-			wantFold:  []Match{{0, 8, "ZHONGGUO"}, {8, 14, "中国"}},
-			wantExact: []Match{{8, 14, "中国"}},
+			wantFold:  []Match{{Start: 0, End: 8, Keyword: "ZHONGGUO", Group: 1}, {Start: 8, End: 14, Keyword: "中国"}}, // 归一形 [中国, zhongguo]
+			wantExact: []Match{{Start: 8, End: 14, Keyword: "中国"}},                                                    // 原词库 [中国, zhongguo, ZhongGuo]
 		},
 		{
 			name:      "无展开式折叠：ß 不匹配 ss",
 			keywords:  []string{"straße"},
 			text:      "STRASSE straße",
-			wantFold:  []Match{{8, 15, "straße"}},
-			wantExact: []Match{{8, 15, "straße"}},
+			wantFold:  []Match{{Start: 8, End: 15, Keyword: "straße"}},
+			wantExact: []Match{{Start: 8, End: 15, Keyword: "straße"}},
 		},
 		{
 			name:      "希腊三成员轨道含终格 ς",
 			keywords:  []string{grLower},
 			text:      grUpper + " " + grLower + " " + grFinal,
-			wantFold:  []Match{{0, 12, grUpper}, {13, 25, grLower}, {26, 38, grFinal}},
-			wantExact: []Match{{13, 25, grLower}}, // 精确模式：grFinal ≠ grLower 不命中
+			wantFold:  []Match{{Start: 0, End: 12, Keyword: grUpper}, {Start: 13, End: 25, Keyword: grLower}, {Start: 26, End: 38, Keyword: grFinal}},
+			wantExact: []Match{{Start: 13, End: 25, Keyword: grLower}}, // 精确模式：grFinal ≠ grLower 不命中
 		},
 		{
 			name:      "中文不受折叠影响",
 			keywords:  []string{"上海"},
 			text:      "上海",
-			wantFold:  []Match{{0, 6, "上海"}},
-			wantExact: []Match{{0, 6, "上海"}},
+			wantFold:  []Match{{Start: 0, End: 6, Keyword: "上海"}},
+			wantExact: []Match{{Start: 0, End: 6, Keyword: "上海"}},
 		},
 	}
 	for _, tc := range tests {
@@ -192,6 +194,20 @@ func foldOracleAll(kws []string, text string) []Match {
 	}
 	pos = append(pos, len(text))
 	n := len(pos) - 1
+	// 词身份组号表：折叠归一形 → 去重词库下标（与 resolveSynonyms 无同义词
+	// 分区的编号一致；Match.Group 的语义锚点由语义表用例手工固定）。
+	groupOf := make(map[string]int32, len(kws))
+	seenGrp := make(map[string]struct{}, len(kws))
+	gi := 0
+	for _, kw := range kws {
+		id := foldNorm(kw)
+		if _, dup := seenGrp[id]; dup {
+			continue
+		}
+		seenGrp[id] = struct{}{}
+		groupOf[id] = int32(gi)
+		gi++
+	}
 	outSet := make(map[Match]struct{})
 	var out []Match
 	for end := 1; end <= n; end++ {
@@ -203,7 +219,7 @@ func foldOracleAll(kws []string, text string) []Match {
 			sub := text[pos[start]:pos[end]]
 			for _, kr := range bucket {
 				if strings.EqualFold(sub, string(kr)) {
-					mt := Match{pos[start], pos[end], sub}
+					mt := Match{Start: pos[start], End: pos[end], Keyword: sub, Group: int(groupOf[foldNorm(sub)])}
 					if _, dup := outSet[mt]; !dup {
 						outSet[mt] = struct{}{}
 						out = append(out, mt)
@@ -304,13 +320,17 @@ func TestCaseFoldRandomOracle(t *testing.T) {
 				t.Fatalf("第 %d 组不变量破坏: %+v（文本 %q）", iter, mt, text)
 			}
 		}
-		// 精确命中 ⊆ fold 全量命中
-		ovlSet := make(map[Match]struct{}, len(ovl))
+		// 精确命中 ⊆ fold 全量命中（跨模式组号空间不同，按区间+文本切片对照）
+		type span struct {
+			start, end int
+			kw         string
+		}
+		ovlSet := make(map[span]struct{}, len(ovl))
 		for _, mt := range ovl {
-			ovlSet[mt] = struct{}{}
+			ovlSet[span{mt.Start, mt.End, mt.Keyword}] = struct{}{}
 		}
 		for _, mt := range em.FindAll(text) {
-			if _, ok := ovlSet[mt]; !ok {
+			if _, ok := ovlSet[span{mt.Start, mt.End, mt.Keyword}]; !ok {
 				t.Fatalf("第 %d 组精确命中 %+v 未出现在 fold 全量集合（文本 %q）", iter, mt, text)
 			}
 		}
@@ -397,21 +417,21 @@ func TestCaseFoldRuneStartBackMixed(t *testing.T) {
 	m := mustNewFold(t, []string{"a" + kelvin + "b" + kelvin + "c"})
 	text := "A" + "k" + "b" + kelvin + "c"
 	got := m.FindAll(text)
-	want := []Match{{0, 7, text}}
+	want := []Match{{Start: 0, End: 7, Keyword: text}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("混合宽度回退不符\ngot:  %v\nwant: %v", got, want)
 	}
 	// 嵌入噪声后仍正确（前退跨越 3B 宽 rune 与噪声）
 	text2 := "x" + text + "y"
 	got2 := m.FindAll(text2)
-	want2 := []Match{{1, 8, text}}
+	want2 := []Match{{Start: 1, End: 8, Keyword: text}}
 	if !slices.Equal(got2, want2) {
 		t.Fatalf("带噪声混合宽度命中不符\ngot:  %v\nwant: %v", got2, want2)
 	}
 	// 2B 轨道（y/ÿ/Ÿ）：同 rune 数同 span，Keyword 为文本原样切片
 	m2 := mustNewFold(t, []string{"aÿb"})
 	got3 := m2.FindAll("aŸb")
-	want3 := []Match{{0, 4, "aŸb"}}
+	want3 := []Match{{Start: 0, End: 4, Keyword: "aŸb"}}
 	if !slices.Equal(got3, want3) {
 		t.Fatalf("2B 轨道命中不符\ngot:  %v\nwant: %v", got3, want3)
 	}
@@ -434,15 +454,15 @@ func TestCaseFoldEdges(t *testing.T) {
 		t.Error("无命中 FindNext(fold) 应返回 false")
 	}
 	// 非法 UTF-8：不 panic、不误命中（RuneError 不在折叠轨道）
-	if got := m.FindAll("g\x88o Go"); len(got) != 1 || got[0] != (Match{4, 6, "Go"}) {
+	if got := m.FindAll("g\x88o Go"); len(got) != 1 || got[0] != (Match{Start: 4, End: 6, Keyword: "Go"}) {
 		t.Errorf("非法字节 fold 结果不符: %v", got)
 	}
 	// offset 落在多字节字符中间：向后对齐（中=3B，\x96 为非法字节宽 1）
-	if mt, ok := m.FindNext("中\x96中文 Go", 1); !ok || mt != (Match{4, 10, "中文"}) {
+	if mt, ok := m.FindNext("中\x96中文 Go", 1); !ok || mt != (Match{Start: 4, End: 10, Keyword: "中文", Group: 1}) {
 		t.Errorf("rune 对齐 fold 结果不符: (%+v, %v)", mt, ok)
 	}
 	// offset 语义：后缀首条平移
-	if mt, ok := m.FindNext("go go", 3); !ok || mt != (Match{3, 5, "go"}) {
+	if mt, ok := m.FindNext("go go", 3); !ok || mt != (Match{Start: 3, End: 5, Keyword: "go"}) {
 		t.Errorf("FindNext(fold, 3) = (%+v, %v), 期望 go(3,5)", mt, ok)
 	}
 }
@@ -461,7 +481,7 @@ func TestCaseFoldMode(t *testing.T) {
 	if !fm.CaseFold() {
 		t.Error("WithCaseFold 构建应为折叠模式（CaseFold=true）")
 	}
-	want := []Match{{0, 5, "Hello"}, {14, 20, "世界"}}
+	want := []Match{{Start: 0, End: 5, Keyword: "Hello"}, {Start: 14, End: 20, Keyword: "世界", Group: 1}}
 	if got := fm.FindAll(text); !slices.Equal(got, want) {
 		t.Errorf("折叠模式结果不符: %v", got)
 	}

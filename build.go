@@ -1,29 +1,121 @@
 // 本文件为两套自动机的构建管线（公共接口见 matcher.go，查询引擎见
-// engine.go，选项见 option.go）：精确构建（trie 插入 → BFS 失败指针 → CSR
-// 展平 → BM 字节过滤器）与折叠构建（SimpleFold 轨道代表合一 + 轨道展开，
-// 见文件末段）。两套管线均直接从关键词列表构建，构建后即定型为对应模式；
-// 命名与 engine.go 的 exact*/fold* 系列保持对偶（exactBuilder/trieNode ↔
-// foldBuilder/foldBuilderNode）。
+// engine.go，选项见 option.go）：分组解析（resolveSynonyms）、精确构建
+// （trie 插入 → BFS 失败指针 → CSR 展平 → BM 字节过滤器）与折叠构建
+// （SimpleFold 轨道代表合一 + 轨道展开，见文件末段）。两套管线均直接从
+// 关键词列表构建，构建后即定型为对应模式；命名与 engine.go 的 exact*/
+// fold* 系列保持对偶（exactBuilder/trieNode ↔ foldBuilder/foldBuilderNode）。
 package ratchetmatch
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 )
 
-// dedupe 按原始出现顺序去重关键词列表（New 的构建期临时步骤）。
-func dedupe(keywords []string) []string {
+// ---------------------------------------------------------------------------
+// 同义词分组解析（WithSynonyms → 词库扩充 + 组号表）
+// ---------------------------------------------------------------------------
+
+// synonymPart 聚合同义词分组的解析产物：
+//   - groups：WithSynonyms 声明组成员表（nil = 未使用 WithSynonyms）；
+//   - singletons：未声明分组的词库下标表（词库序；其组号 = len(groups)+表内序号）；
+//   - groupOf：词→组号（词身份由 norm 决定：折叠模式为折叠归一形）。
+type synonymPart struct {
+	groups     [][]string
+	singletons []int32
+	groupOf    map[string]int32
+}
+
+// resolveSynonyms 合并显式关键词与同义词组员（组员自动入库、组内去重），
+// 返回去重后词库与分组解析结果。fold 非 nil 时词身份为折叠归一形，返回的
+// 词库亦为归一形——与折叠 trie 的边键（foldKey）同构，折叠等价词天然合一，
+// 构建出的自动机与原词输入完全等价。显式关键词的合法性（空串/非法
+// UTF-8/U+FFFD）由 New 在调用前按原始下标校验；组员的同类错误在此按
+// 「组下标 + 组内下标」报出（信息可区分原因）。同一词出现在两个声明组
+// 报错（含词与两组号，fold 模式按归一形判定）。
+func resolveSynonyms(keywords []string, syn [][]string, norm func(string) string) ([]string, *synonymPart, error) {
+	part := &synonymPart{}
+	// 词库：显式关键词按词身份去重（保序），组员按组序并入
 	seen := make(map[string]struct{}, len(keywords))
 	kws := make([]string, 0, len(keywords))
 	for _, kw := range keywords {
-		if _, dup := seen[kw]; dup {
+		id := kw
+		if norm != nil {
+			id = norm(kw)
+		}
+		if _, dup := seen[id]; dup {
 			continue
 		}
-		seen[kw] = struct{}{}
-		kws = append(kws, kw)
+		seen[id] = struct{}{}
+		kws = append(kws, id)
 	}
-	return kws
+	if len(syn) == 0 {
+		// 未使用 WithSynonyms：每词一个单元素组，组号即去重词库序
+		part.groupOf = make(map[string]int32, len(kws))
+		for i, kw := range kws {
+			part.groupOf[kw] = int32(i)
+		}
+		return kws, part, nil
+	}
+	part.groupOf = make(map[string]int32)
+	part.groups = make([][]string, 0, len(syn))
+	for gi, g := range syn {
+		if len(g) == 0 {
+			return nil, nil, fmt.Errorf("ratchetmatch: synonym group at index %d is empty", gi)
+		}
+		inGrp := make(map[string]struct{}, len(g))
+		members := make([]string, 0, len(g))
+		for mi, w := range g {
+			switch {
+			case w == "":
+				return nil, nil, fmt.Errorf("ratchetmatch: synonym group %d member %d is empty", gi, mi)
+			case !utf8.ValidString(w):
+				return nil, nil, fmt.Errorf("ratchetmatch: synonym group %d member %d is not valid UTF-8", gi, mi)
+			case strings.Contains(w, "\uFFFD"):
+				return nil, nil, fmt.Errorf("ratchetmatch: synonym group %d member %d contains U+FFFD (replacement character)", gi, mi)
+			}
+			id := w
+			if norm != nil {
+				id = norm(w)
+			}
+			if prev, clash := part.groupOf[id]; clash && prev != int32(gi) {
+				return nil, nil, fmt.Errorf("ratchetmatch: synonym %q belongs to both group %d and group %d", w, prev, gi)
+			}
+			if _, dup := inGrp[id]; dup {
+				continue
+			}
+			inGrp[id] = struct{}{}
+			part.groupOf[id] = int32(gi)
+			members = append(members, id)
+			if _, dup := seen[id]; !dup {
+				seen[id] = struct{}{}
+				kws = append(kws, id)
+			}
+		}
+		part.groups = append(part.groups, members)
+	}
+	// 未声明分组的词按词库序获得单元素组（组号接在声明组之后）
+	for i, kw := range kws {
+		if _, declared := part.groupOf[kw]; declared {
+			continue
+		}
+		part.groupOf[kw] = int32(len(part.groups) + len(part.singletons))
+		part.singletons = append(part.singletons, int32(i))
+	}
+	return kws, part, nil
+}
+
+// foldNorm 返回词 w 的折叠归一形（逐 rune 取折叠轨道代表，与折叠 trie 边键
+// foldKey 同源）：归一形相同的词在折叠自动机中共享同一路径与终止节点。
+func foldNorm(w string) string {
+	var b strings.Builder
+	b.Grow(len(w))
+	for _, r := range w {
+		b.WriteRune(foldKey(r))
+	}
+	return b.String()
 }
 
 // ---------------------------------------------------------------------------
@@ -42,10 +134,12 @@ type exactBuilder struct {
 
 // exactBuilderNode 精确构建期节点：children 即自有 trie 边。
 type exactBuilderNode struct {
-	children map[rune]int32
-	fail     int32
-	termLen  int32
-	outLens  []int32
+	children  map[rune]int32
+	fail      int32
+	termLen   int32
+	termGroup int32 // 终止关键词的组号（resolveSynonyms 的分区语义）
+	outLens   []int32
+	outGroups []int32 // 与 outLens 平行的组号
 }
 
 // newExactBuilder 创建只含 root（nodes[0]）的精确 builder。
@@ -101,13 +195,16 @@ func (b *exactBuilder) buildAutomaton() {
 			b.nodes[c].fail = b.gotoWithFail(nd.fail, r)
 			queue = append(queue, c)
 		}
-		// 2) 输出信息：以该状态结束的全部关键词长度（降序）。
+		// 2) 输出信息：以该状态结束的全部关键词长度（降序）与平行组号。
 		//    自身关键词（若有）必最长：失败链上的关键词都是其真后缀，严格更短，
 		//    因此 [termLen] ++ fail.outLens 天然严格降序且无重复。
 		if nd.termLen > 0 {
 			nd.outLens = append([]int32{nd.termLen}, fd.outLens...)
+			nd.outGroups = append([]int32{nd.termGroup}, fd.outGroups...)
 		} else {
-			nd.outLens = fd.outLens // 无自身输出时直接共享失败链的切片（构建后只读）
+			// 无自身输出时直接共享失败链的切片（构建后只读）
+			nd.outLens = fd.outLens
+			nd.outGroups = fd.outGroups
 		}
 	}
 }
@@ -133,6 +230,7 @@ func (b *exactBuilder) flatten() ([]exactNode, []rune, []int32) {
 		nd := &nodes[i]
 		nd.fail = bn.fail
 		nd.outLens = bn.outLens
+		nd.outGroups = bn.outGroups
 		if len(bn.children) == 0 {
 			continue // 叶子：count=0，查询期直接沿 fail 回退
 		}
@@ -160,8 +258,9 @@ func setFilterBit(bf *[32]byte, r rune) {
 }
 
 // buildExact 从去重后的关键词列表构建精确自动机（New 默认模式的实现体，
-// 见 matcher.go）。
-func buildExact(keywords []string) *exactMatcher {
+// 见 matcher.go）：part 携带同义词分组解析结果（词→组号表与 GroupWords
+// 成员表；无 WithSynonyms 时为每词单元素组，见 synonymPart）。
+func buildExact(keywords []string, part *synonymPart) *exactMatcher {
 	b := newExactBuilder(len(keywords))
 	em := &exactMatcher{}
 	for _, kw := range keywords {
@@ -170,6 +269,7 @@ func buildExact(keywords []string) *exactMatcher {
 			cur = b.insert(cur, r)
 		}
 		b.nodes[cur].termLen = int32(len(kw)) // 终止标记：关键词字节长度
+		b.nodes[cur].termGroup = part.groupOf[kw]
 		// 收集词库首字符字节集：首 rune 的 UTF-8 首字节（见 skipForward）
 		for _, r := range kw {
 			setFilterBit(&em.byteFilter, r)
@@ -179,6 +279,8 @@ func buildExact(keywords []string) *exactMatcher {
 	b.buildAutomaton()
 	em.nodes, em.transKeys, em.transVals = b.flatten()
 	em.rootNext = b.nodes[0].children
+	em.groups, em.singletons = part.groups, part.singletons
+	em.words = keywords
 	return em
 }
 
@@ -210,24 +312,27 @@ func foldOrbit(key rune) []rune {
 
 // foldBuilder 构建期折叠 trie：children 以折叠代表为键，fold 相等的关键词
 // 路径共享节点（大小写变体合一），同节点可终止多个关键词（termNrs 可含
-// 等值重复，BFS 期去重）。
+// 等值重复，BFS 期去重；折叠同形词组号恒等，见 flushFoldTerms）。
 type foldBuilder struct {
 	nodes []foldBuilderNode
 }
 
 // foldBuilderNode 构建期节点：children 即自有折叠边。
 type foldBuilderNode struct {
-	children map[rune]int32 // 键 = 折叠代表 rune
-	fail     int32
-	termNrs  []int32 // 插入期收集：以此状态结束的各关键词 rune 数（可重复）
-	outRunes []int32 // BFS 后定型：全部输出 rune 数，严格降序无重复（见 flushFoldTerms）
+	children   map[rune]int32 // 键 = 折叠代表 rune
+	fail       int32
+	termNrs    []int32 // 插入期收集：以此状态结束的各关键词 rune 数（可重复）
+	termGroups []int32 // 与 termNrs 平行的组号（折叠同形词组号恒等）
+	outRunes   []int32 // BFS 后定型：全部输出 rune 数，严格降序无重复（见 flushFoldTerms）
+	outGroups  []int32 // 与 outRunes 平行的组号
 }
 
-// buildFold 从去重后的关键词列表构建折叠自动机（New(WithCaseFold()) 的
-// 实现体，见 matcher.go）。流程与精确构建相同：插词 → BFS 失败指针 →
-// 展平 CSR；差异仅在边按折叠代表合一、失败指针按折叠匹配计算、root 表/
-// 字节过滤器/CSR 键展开为全部轨道成员、输出为关键词 rune 数。
-func buildFold(keywords []string) *foldMatcher {
+// buildFold 从去重后的关键词列表（折叠模式下为归一形，见 resolveSynonyms）
+// 构建折叠自动机（New(WithCaseFold()) 的实现体，见 matcher.go）：part 携带
+// 同义词分组解析结果。流程与精确构建相同：插词 → BFS 失败指针 → 展平 CSR；
+// 差异仅在边按折叠代表合一、失败指针按折叠匹配计算、root 表/字节过滤器/
+// CSR 键展开为全部轨道成员、输出为关键词 rune 数。
+func buildFold(keywords []string, part *synonymPart) *foldMatcher {
 	fm := &foldMatcher{}
 	b := &foldBuilder{nodes: make([]foldBuilderNode, 1, len(keywords)+1)}
 	b.nodes[0].children = make(map[rune]int32)
@@ -239,9 +344,12 @@ func buildFold(keywords []string) *foldMatcher {
 			nr++
 		}
 		b.nodes[cur].termNrs = append(b.nodes[cur].termNrs, nr)
+		b.nodes[cur].termGroups = append(b.nodes[cur].termGroups, part.groupOf[kw])
 	}
 	b.buildFoldAutomaton()
 	b.flattenFold(fm)
+	fm.groups, fm.singletons = part.groups, part.singletons
+	fm.words = keywords
 	return fm
 }
 
@@ -297,19 +405,37 @@ func (b *foldBuilder) gotoFold(s int32, key rune) int32 {
 // 合并为严格降序无重复的 rune 数数组。同节点全部输出都是规范路径 σ 的后缀
 // （自身即 σ 全串）：折叠代表每位置宽 ≥1 字节，rune 数更少则字节必更少，
 // 故 rune 数序与字节长序等价；按 rune 数降序排序并对重复（如 "sS"/"ss"）
-// 去重即得严格降序无重复。
+// 去重即得严格降序无重复。组号随排序同步置换；去重丢弃的重复 rune 数对应
+// 折叠同形词（归一形恒等，分组校验保证组号必等），任取其一。
 func (b *foldBuilder) flushFoldTerms(nd, fd *foldBuilderNode) {
 	if len(nd.termNrs) == 0 {
-		nd.outRunes = fd.outRunes // 无自身输出时直接共享失败链切片（构建后只读）
+		// 无自身输出时直接共享失败链切片（构建后只读）
+		nd.outRunes = fd.outRunes
+		nd.outGroups = fd.outGroups
 		return
 	}
-	nrs := make([]int32, 0, len(nd.termNrs)+len(fd.outRunes))
-	nrs = append(nrs, nd.termNrs...)
-	nrs = append(nrs, fd.outRunes...)
-	slices.Sort(nrs)
-	slices.Reverse(nrs) // 降序
-	nrs = slices.Compact(nrs)
-	nd.outRunes = nrs
+	type term struct {
+		nr, grp int32
+	}
+	terms := make([]term, 0, len(nd.termNrs)+len(fd.outRunes))
+	for i, nr := range nd.termNrs {
+		terms = append(terms, term{nr, nd.termGroups[i]})
+	}
+	for i, nr := range fd.outRunes {
+		terms = append(terms, term{nr, fd.outGroups[i]})
+	}
+	slices.SortFunc(terms, func(a, c term) int { return int(c.nr) - int(a.nr) })
+	kept := terms[:0]
+	for i, tm := range terms {
+		if i == 0 || tm.nr != terms[i-1].nr {
+			kept = append(kept, tm)
+		}
+	}
+	nd.outRunes = make([]int32, len(kept))
+	nd.outGroups = make([]int32, len(kept))
+	for i, tm := range kept {
+		nd.outRunes[i], nd.outGroups[i] = tm.nr, tm.grp
+	}
 }
 
 // flattenFold 展平折叠自动机：CSR 每条自有边展开为其轨道全部成员（轨道互
@@ -340,6 +466,7 @@ func (b *foldBuilder) flattenFold(fm *foldMatcher) {
 		nd := &nodes[i]
 		nd.fail = bn.fail
 		nd.outRunes = bn.outRunes
+		nd.outGroups = bn.outGroups
 		if len(bn.children) == 0 {
 			continue // 叶子：count=0，查询期直接沿 fail 回退
 		}
