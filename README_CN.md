@@ -104,6 +104,18 @@ for _, m := range matcher.FindAll(text) {
 
 需要**全部出现**（含互相重叠）时用 `FindAllOverlapping`：如词库 `{"国", "人", "中国人"}` 在 `"中国人"` 上返回 3 条。该模式无 `FindNext` 版本（重叠语义与无状态按需迭代不兼容）。
 
+### 大小写折叠
+
+匹配模式由 `New` 一次性决定、不可更改。默认大小写敏感的精确匹配；传 `WithCaseFold()` 获得等价于 `strings.EqualFold` 的折叠匹配（逐 rune 的 SimpleFold 轨道）：
+
+```go
+fm, _ := ratchetmatch.New([]string{"hello", "世界"}, ratchetmatch.WithCaseFold())
+fm.FindAll("Hello, WORLD! 世界") // 命中 Hello(0,5) 与 世界(14,20)
+fm.CaseFold()                    // true
+```
+
+词库中的大小写变体会合一，不漏报；`Match.Keyword` 为文本原样切片（如 `"Hello"`），`Start`/`End` 仍可直接切文本。同一词库需要两种模式时，分别 `New` 两个实例。
+
 算法原理、API 契约与验收场景的权威描述见 `spec/spec.md`。
 
 ## 许可证

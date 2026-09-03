@@ -130,7 +130,7 @@
 
 ### Requirement: FindAllOverlapping 重叠全量返回
 
-系统 SHALL 提供 `FindAllOverlapping(text string, opts ...Option) []Match`，返回全部关键词出现（含互相重叠者），服务词频统计、索引构建：
+系统 SHALL 提供 `FindAllOverlapping(text string) []Match`，返回全部关键词出现（含互相重叠者），服务词频统计、索引构建：
 
 - 每个（关键词，出现位置）对输出一次；不做非重叠筛选（outLens 本就携带以每个结束位置结尾的全部关键词，fail 链输出继承即全量信息）
 - 输出按 **End 升序**、同一 End 按**长度降序**（单遍扫描的天然产出序，注意与 `FindAll` 的 Start 升序不同序）
@@ -144,7 +144,7 @@
 
 ### Requirement: FindNext 按需查找（超长文本友好）
 
-系统 SHALL 提供 `FindNext(text string, offset int, opts ...Option) (Match, bool)`（comma-ok 形式；裸零值 Match 无法与「文本起点命中」区分，`*Match` nil 语义含混，均被否决）：
+系统 SHALL 提供 `FindNext(text string, offset int) (Match, bool)`（comma-ok 形式；裸零值 Match 无法与「文本起点命中」区分，`*Match` nil 语义含混，均被否决）：
 
 - **无状态**：Matcher 不保存查询进度，可并发调用；调用方以返回 Match 的 End 作为下次 offset 实现按需迭代
 - 从 offset（字节偏移）开始扫描，返回**第一个**满足最左最长语义的命中，找到即终止扫描；自动机从 root 开始（匹配不跨越 offset 向左延伸）

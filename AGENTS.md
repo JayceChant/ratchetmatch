@@ -50,9 +50,9 @@
 
 ```
 matcher.go          公共 API（Package doc / New / Match / Matcher / Find 系列）
-option.go           查询与构建选项（Option / WithCaseFold / 折叠引擎惰性选择）
+option.go           构建选项（Option / WithCaseFold，模式由 New 构建期定型）
 engine.go           自动机查询期结构（nodeAPI / exactNode / foldNode）与泛型扫描引擎（machine）
-build.go            双自动机构建（精确：trie/失败指针/CSR 展平/BM 过滤器；折叠：轨道合一与展开；关键词还原）
+build.go            双自动机构建（精确：trie/失败指针/CSR 展平/BM 过滤器；折叠：轨道合一与展开）
 *_test.go           单元测试、示例、基准、fuzz（testdata/fuzz/ 存回归样本）
 spec/               规格文档（spec.md / tasks.md / checklist.md）
 agents/             通用协作规范目录（供其它项目复用）

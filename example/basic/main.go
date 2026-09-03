@@ -41,6 +41,11 @@ func main() {
 	// 需要字符列号（而非字节偏移）时，用 utf8.RuneCountInString 换算：
 	// runeCount := utf8.RuneCountInString(text[:m.Start])
 
-	// 匹配是精确字符串匹配："Beijing" 不会命中 "北京"。
+	// 匹配默认是精确的："Beijing" 不会命中 "北京"，"GO" 也不会命中 "go"。
+	// 需要大小写折叠（SimpleFold 轨道，strings.EqualFold 语义）时，在构建时
+	// 传入 WithCaseFold 选项，模式即定型：
+	//   fm, err := ratchetmatch.New([]string{"go"}, ratchetmatch.WithCaseFold())
+	//   fm.FindAll("GO") // 命中 go；fm.CaseFold() == true
+	// 同一词库需要两种模式时，分别 New 两个实例即可。
 	fmt.Printf("共命中 %d 处\n", len(hits))
 }

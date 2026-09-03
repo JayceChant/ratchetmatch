@@ -104,6 +104,18 @@ Scan left to right: the smallest start wins; at the same start, the longest keyw
 
 When you need **all occurrences** (including overlapping ones), use `FindAllOverlapping`: e.g., dictionary `{"国", "人", "中国人"}` on `"中国人"` returns 3 hits. This mode has no `FindNext` variant (overlapping semantics is incompatible with stateless on-demand iteration).
 
+### Case Folding
+
+Matching mode is decided once at `New` and cannot be changed afterwards. Case-sensitive exact matching is the default; pass `WithCaseFold()` for `strings.EqualFold`-style matching (per-rune SimpleFold orbits):
+
+```go
+fm, _ := ratchetmatch.New([]string{"hello", "世界"}, ratchetmatch.WithCaseFold())
+fm.FindAll("Hello, WORLD! 世界") // hits Hello(0,5) and 世界(14,20)
+fm.CaseFold()                    // true
+```
+
+Case variants in the dictionary are merged, so nothing is missed; `Match.Keyword` is the original text slice (e.g., `"Hello"`), while `Start`/`End` still slice the text directly. To use both modes on one dictionary, build two `Matcher` instances.
+
 For the authoritative description of algorithm principles, API contracts, and acceptance scenarios, see `spec/spec.md`.
 
 ## License
