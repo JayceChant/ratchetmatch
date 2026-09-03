@@ -104,6 +104,26 @@ for _, m := range matcher.FindAll(text) {
 
 需要**全部出现**（含互相重叠）时用 `FindAllOverlapping`：如词库 `{"国", "人", "中国人"}` 在 `"中国人"` 上返回 3 条。该模式无 `FindNext` 版本（重叠语义与无状态按需迭代不兼容）。
 
+### 大小写折叠
+
+匹配模式由 `New` 一次性决定、不可更改。默认大小写敏感的精确匹配；传 `WithCaseFold()` 获得等价于 `strings.EqualFold` 的折叠匹配（逐 rune 的 SimpleFold 轨道）：
+
+```go
+fm, _ := ratchetmatch.New([]string{"hello", "世界"}, ratchetmatch.WithCaseFold())
+fm.FindAll("Hello, WORLD! 世界") // 命中 Hello(0,5) 与 世界(14,20)
+fm.CaseFold()                    // true
+```
+
+词库中的大小写变体会合一，不漏报；`Match.Keyword` 为文本原样切片（如 `"Hello"`），`Start`/`End` 仍可直接切文本。同一词库需要两种模式时，分别 `New` 两个实例。
+
+**性能提示**：折叠自动机在构建期把折叠轨道预展开进转移表，查询热路径零逐 rune 折叠比较。实测开销（`bench_fold_test.go`；轨道展开使键数约翻倍的 ASCII 词库为最坏情况，100 关键词 × 约 10 万 rune 英文文本）：
+
+- **查询**：与精确模式基本持平（同词库同文本 `FindAll`：fold 3.05 ms vs exact 3.04 ms；中文词库各组差异均在 ±5% 噪声内）——展开后的键仍在同一条 CSR 二分查找路径上，命中提取的 rune 级回退（`runeStartBack`）只在命中位置做几次 rune 前退。
+- **构建**：略高于精确模式（`New` 100 关键词约 1.4x 耗时、+20% 内存；随词库增大摊薄至约 1.1x——轨道展开成本被去重后的大词库摊薄）。SimpleFold 轨道解析与展开键写入均为 `New` 一次性成本。
+- **语义收益**：大小写混排文本上 fold 能命中 exact 漏掉的全部变体——ASCII 基准中 fold 多报约 1000 条（首字母大写词），扫描耗时无可测差异。
+
+经验法则：只要需要大小写不敏感就开 `WithCaseFold()`——查询侧开销可忽略；仅超大词库（>1 万关键词）构建时才可能感知到构建开销。
+
 算法原理、API 契约与验收场景的权威描述见 `spec/spec.md`。
 
 ## 许可证

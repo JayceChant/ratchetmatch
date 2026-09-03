@@ -72,6 +72,11 @@ func FuzzMatch(f *testing.F) {
 	f.Add([]byte("aPQ,bPR,cPS"), "PQ", "PR", "PS")
 	f.Add([]byte(""), "a", "ab", "abc")
 	f.Add([]byte("北京欢迎您"), "北京", "欢迎", "京欢迎")
+	// fold 种子：大小写变体、宽度差（开尔文度）、变音、希腊终格、ß
+	f.Add([]byte("Go Go GO go"), "go", "Go", "")
+	f.Add([]byte("k\u212A\u212Ak"), "\u212A", "k", "")
+	f.Add([]byte("TÜR tür"), "tür", "TUR", "")
+	f.Add([]byte("ΚΟΣΜΟΣ κόσμος"), "κοσμος", "ΣΊΣΥΦΟΣ", "")
 
 	f.Fuzz(func(t *testing.T, text []byte, kwA, kwB, kwC string) {
 		// 空串是合法哨兵（等价省略该关键词），剔除后构建词库
@@ -184,6 +189,61 @@ func FuzzMatch(f *testing.F) {
 				}
 			} else if ok {
 				t.Fatalf("FindNext(text,%d) = (%+v,%v)，期望 false（后缀无命中，词库 %q，文本 %q）",
+					off, got, ok, kws, s)
+			}
+		}
+
+		// --- fold：独立构建折叠 Matcher，与 oracle 对照 ---
+		// 折叠模式与精确模式是两套独立实例（模式构建期定型），此处分别构建。
+		fm, err := New(kws, WithCaseFold())
+		if err != nil {
+			t.Fatalf("New(fold) 意外失败: %v", err)
+		}
+		if !fm.CaseFold() {
+			t.Fatalf("New(WithCaseFold) 应返回折叠模式（词库 %q）", kws)
+		}
+		if m.CaseFold() {
+			t.Fatalf("默认 New 应返回精确模式（词库 %q）", kws)
+		}
+		foldOvl := fm.FindAllOverlapping(s)
+		wantFoldOvl := foldOracleAll(kws, s)
+		if !slices.Equal(foldOvl, wantFoldOvl) {
+			t.Fatalf("Overlapping(fold) %d 条与 oracle %d 条不一致（词库 %q, 文本 %q）\ngot:  %v\nwant: %v",
+				len(foldOvl), len(wantFoldOvl), kws, s, foldOvl, wantFoldOvl)
+		}
+		// --- fold：FindAll == 贪心最左最长(oracle) ---
+		foldAll := fm.FindAll(s)
+		wantFoldAll := greedyLeftmostLongest(wantFoldOvl)
+		if !slices.Equal(foldAll, wantFoldAll) {
+			t.Fatalf("FindAll(fold) 与贪心 oracle 不一致（词库 %q, 文本 %q）\ngot:  %v\nwant: %v",
+				kws, s, foldAll, wantFoldAll)
+		}
+		// --- fold：FindNext 迭代 == FindAll；任意 offset == 后缀首条平移 ---
+		var foldIter []Match
+		for off := 0; ; {
+			mt, ok := fm.FindNext(s, off)
+			if !ok {
+				break
+			}
+			foldIter = append(foldIter, mt)
+			off = mt.End
+		}
+		if !slices.Equal(foldIter, foldAll) {
+			t.Fatalf("FindNext(fold) 迭代与 FindAll(fold) 不一致（词库 %q, 文本 %q）", kws, s)
+		}
+		for off := 0; off <= len(s); off++ {
+			got, ok := fm.FindNext(s, off)
+			wantAll := fm.FindAll(s[off:])
+			if len(wantAll) > 0 {
+				want := wantAll[0]
+				want.Start += off
+				want.End += off
+				if !ok || got != want {
+					t.Fatalf("FindNext(fold,%d) = (%+v,%v)，期望后缀 FindAll 首条 %+v（词库 %q，文本 %q）",
+						off, got, ok, want, kws, s)
+				}
+			} else if ok {
+				t.Fatalf("FindNext(fold,%d) = (%+v,%v)，期望 false（后缀无命中，词库 %q，文本 %q）",
 					off, got, ok, kws, s)
 			}
 		}

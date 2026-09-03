@@ -98,12 +98,12 @@ var benchNoiseRunes = []rune("的在了是和有就不人都一个上中大来�
 
 var (
 	// 稀疏词库：自动机、BM 坏字符表与两份长文本
-	benchMatcherSparse *Matcher
+	benchMatcherSparse Matcher
 	benchBMSparse      [][256]int
 	benchTextZhSparse  string // 纯中文：约 10 万 rune（~300KB）
 	benchTextMixSparse string // 中英混合：约 10 万 rune（约一半 ASCII）
 	// 重叠词库：同上四件套
-	benchMatcherOverlap *Matcher
+	benchMatcherOverlap Matcher
 	benchBMOverlap      [][256]int
 	benchTextZhOverlap  string
 	benchTextMixOverlap string
@@ -257,14 +257,15 @@ func collectLeftmostLongest(text string, occs []interval) []Match {
 // 与 FindAll 一致。词尾判定用 outLens[0] == 起点至今路径的字节长度：成品
 // 节点不存 termLen，而 outLens 严格降序、首元素即自身词长（fail 链继承的
 // 真后缀关键词严格更短），该等式成立当且仅当路径节点是词尾。
-func trieFindAll(m *Matcher, text string) []Match {
+func trieFindAll(m Matcher, text string) []Match {
+	em := m.(*exactMatcher) // 纯 Trie 参照只关心精确自动机的 trie 结构
 	n := len(text)
 	pos := 0
 	var out []Match
 	for pos < n {
 		// 从 root 起尝试一条 trie 路径：起点 rune 无对应边则跳过一个 rune
 		r, startSize := utf8.DecodeRuneInString(text[pos:])
-		node, ok := m.rootNext[r]
+		node, ok := em.rootNext[r]
 		if !ok {
 			pos += startSize
 			continue
@@ -272,14 +273,14 @@ func trieFindAll(m *Matcher, text string) []Match {
 		p := pos + startSize // 起点 rune 已消费为路径首步
 		end := -1            // 当前路径上最后一个词尾位置（-1 表示无完整命中）
 		for {
-			if lens := m.nodes[node].outLens; len(lens) > 0 && int(lens[0]) == p-pos {
+			if lens := em.nodes[node].outLens; len(lens) > 0 && int(lens[0]) == p-pos {
 				end = p // 词尾判定：outLens[0] 恰为自身词长（见函数注释）
 			}
-			if m.nodes[node].count == 0 || p >= n {
+			if em.nodes[node].count == 0 || p >= n {
 				break // 叶子或文本耗尽：路径终止
 			}
 			r, size := utf8.DecodeRuneInString(text[p:])
-			next := m.find(node, r)
+			next := em.find(node, r)
 			if next == 0 {
 				break // 失配：路径终止（无 fail 链，不回退）
 			}
@@ -404,7 +405,7 @@ func stringsIndexFindNext(keywords []string, text string, offset int) (Match, bo
 func TestBaselineEquiv(t *testing.T) {
 	for _, d := range []struct {
 		name     string
-		matcher  *Matcher
+		matcher  Matcher
 		keywords []string
 		tables   [][256]int
 		texts    [2]string
