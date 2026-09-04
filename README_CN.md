@@ -75,7 +75,7 @@ for _, m := range matcher.FindAll(text) {
 }
 ```
 
-完整可运行示例（含输出）见 `example_test.go`；更多拿来即用的完整程序在 `example/` 目录（`go run ./basic/`、`./semantics/`、`./iterate/`、`./wordcount/`——语义对照、按需迭代、词频统计，每个都是可整体复制到自己项目里的自包含单文件）。中文每字占 3 字节、ASCII 每字符 1 字节；匹配是精确匹配，`Beijing` 不会命中 `北京`。需要字符序号时用 `utf8.RuneCountInString(text[:m.Start])` 换算。
+完整可运行示例（含输出）见 `example_test.go`；更多拿来即用的完整程序在 `example/` 目录（`go run ./basic/`、`./semantics/`、`./iterate/`、`./wordcount/`、`./synonyms/`——语义对照、按需迭代、词频统计、同义词分组，每个都是可整体复制到自己项目里的自包含单文件）。中文每字占 3 字节、ASCII 每字符 1 字节；匹配是精确匹配，`Beijing` 不会命中 `北京`。需要字符序号时用 `utf8.RuneCountInString(text[:m.Start])` 换算。
 
 ## 按需迭代：超长文本首命中即停
 

@@ -65,4 +65,25 @@ func main() {
 	for _, m := range hits {
 		fmt.Printf("  %q  [%d,%d)\n", m.Keyword, m.Start, m.End)
 	}
+
+	// ---- 进阶：按同义词组合并统计 ----
+	// 统计视角下 "人工智能 / AI / 机器智能" 往往是同一个概念——与其拿到
+	// 分散的词频再自己查表归并，不如在构建时用 WithSynonyms 声明分组：命中
+	// 自带 Match.Group，按组聚合就是一次切片自增（分组不改变匹配语义）。
+	syn, err := ratchetmatch.New([]string{"人工智能", "机器学习", "深度学习", "学习"},
+		ratchetmatch.WithSynonyms([][]string{
+			{"人工智能", "AI", "机器智能"}, // 组 0：中英写法并入同一概念
+		}))
+	if err != nil {
+		log.Fatal(err)
+	}
+	groups := syn.WordGroups()
+	groupCounts := make([]int, len(groups))
+	for _, m := range syn.FindAllOverlapping(text) {
+		groupCounts[m.Group]++
+	}
+	fmt.Println("\n按同义词组聚合（WordGroups 下标即组号）：")
+	for g, members := range groups {
+		fmt.Printf("  组%d  %v × %d\n", g, members, groupCounts[g])
+	}
 }

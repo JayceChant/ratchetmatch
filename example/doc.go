@@ -8,6 +8,7 @@
 //	go run ./semantics/   # 最左最长语义演示：同一文本三种模式对比
 //	go run ./iterate/     # 超长流式文本：FindNext 首命中即停
 //	go run ./wordcount/   # 词频统计：FindAllOverlapping 全量计数
+//	go run ./synonyms/    # 同义词分组：WithSynonyms 声明组，命中自带组号
 //
 // 独立模块方案：example 目录自带 go.mod（replace 指向仓库根目录），与根
 // module 互不干扰——示例无需被主模块编译/发布，也不影响根目录的测试门槛

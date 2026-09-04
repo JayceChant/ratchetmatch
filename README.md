@@ -75,7 +75,7 @@ for _, m := range matcher.FindAll(text) {
 }
 ```
 
-For a complete runnable example (with output) see `example_test.go`; full copy-and-run programs live in `example/` (`go run ./basic/`, `./semantics/`, `./iterate/`, `./wordcount/` — matching semantics, on-demand iteration, and term-frequency counting, each a self-contained single file you can copy into your own project). Each Chinese character occupies 3 bytes and each ASCII character 1 byte; matching is exact — `Beijing` does not match `北京`. To get character ordinals, convert with `utf8.RuneCountInString(text[:m.Start])`.
+For a complete runnable example (with output) see `example_test.go`; full copy-and-run programs live in `example/` (`go run ./basic/`, `./semantics/`, `./iterate/`, `./wordcount/`, `./synonyms/` — matching semantics, on-demand iteration, term-frequency counting, and synonym grouping, each a self-contained single file you can copy into your own project). Each Chinese character occupies 3 bytes and each ASCII character 1 byte; matching is exact — `Beijing` does not match `北京`. To get character ordinals, convert with `utf8.RuneCountInString(text[:m.Start])`.
 
 ## On-Demand Iteration: First-Hit-Early-Stop for Very Long Texts
 
