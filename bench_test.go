@@ -107,7 +107,20 @@ var (
 	benchBMOverlap      [][256]int
 	benchTextZhOverlap  string
 	benchTextMixOverlap string
+	// 组号对照表：基准词库未用 WithSynonyms，Match.Group 恰为词库下标，
+	// 供三组参照填充 Match（TestBaselineEquiv 以 DeepEqual 全等校验）。
+	benchGroupIDSparse  []int
+	benchGroupIDOverlap []int
 )
+
+// identityGroups 构造 i → i 的组号表（无 WithSynonyms 词库的分区语义）。
+func identityGroups(n int) []int {
+	g := make([]int, n)
+	for i := range g {
+		g[i] = i
+	}
+	return g
+}
 
 // benchSink 防止编译器把基准循环内的被测调用优化掉。
 var benchSink []Match
@@ -142,6 +155,8 @@ func init() {
 	benchTextMixSparse = buildMixedText(targetRunes, benchKeywordsSparse)
 	benchTextZhOverlap = buildChineseText(targetRunes, benchKeywordsOverlap)
 	benchTextMixOverlap = buildMixedText(targetRunes, benchKeywordsOverlap)
+	benchGroupIDSparse = identityGroups(len(benchKeywordsSparse))
+	benchGroupIDOverlap = identityGroups(len(benchKeywordsOverlap))
 }
 
 // buildBMTables 为每个关键词预构建 Boyer-Moore 坏字符表。
@@ -224,13 +239,18 @@ func buildMixedText(n int, keywords []string) string {
 	return b.String()
 }
 
-// interval 是一个候选命中的字节区间 [start,end)。
-type interval struct{ start, end int }
+// interval 是一个候选命中的字节区间 [start,end)，kw 为词库下标（组号来源）。
+type interval struct {
+	start, end int
+	kw         int
+}
 
 // collectLeftmostLongest 把逐词枚举出的全部出现归并为非重叠最左最长结果：
 // 按起点升序（同起点更长在前）排序后扫描，丢弃与已提交命中重叠者。
 // 与 FindAll 语义一致，供 strings.Index / Boyer-Moore 两组逐词参照共用。
-func collectLeftmostLongest(text string, occs []interval) []Match {
+// groups 为词库下标 → 组号表（参照实现不感知同义词声明，基准词库未用
+// WithSynonyms 时组号即词库下标）。
+func collectLeftmostLongest(text string, occs []interval, groups []int) []Match {
 	slices.SortFunc(occs, func(a, b interval) int {
 		if c := cmp.Compare(a.start, b.start); c != 0 {
 			return c
@@ -242,7 +262,7 @@ func collectLeftmostLongest(text string, occs []interval) []Match {
 		if n := len(out); n > 0 && o.start < out[n-1].End {
 			continue // 与已提交命中重叠：更左/更长候选已被归并，跳过
 		}
-		out = append(out, Match{Start: o.start, End: o.end, Keyword: text[o.start:o.end]})
+		out = append(out, Match{Start: o.start, End: o.end, Keyword: text[o.start:o.end], Group: groups[o.kw]})
 	}
 	return out
 }
@@ -272,9 +292,11 @@ func trieFindAll(m Matcher, text string) []Match {
 		}
 		p := pos + startSize // 起点 rune 已消费为路径首步
 		end := -1            // 当前路径上最后一个词尾位置（-1 表示无完整命中）
+		endGroup := 0        // 词尾关键词的组号（outGroups[0] 与 outLens[0] 平行）
 		for {
 			if lens := em.nodes[node].outLens; len(lens) > 0 && int(lens[0]) == p-pos {
 				end = p // 词尾判定：outLens[0] 恰为自身词长（见函数注释）
+				endGroup = int(em.nodes[node].outGroups[0])
 			}
 			if em.nodes[node].count == 0 || p >= n {
 				break // 叶子或文本耗尽：路径终止
@@ -291,7 +313,7 @@ func trieFindAll(m Matcher, text string) []Match {
 			pos += startSize // 本起点无完整命中：前进一个 rune 重新起步
 			continue
 		}
-		out = append(out, Match{Start: pos, End: end, Keyword: text[pos:end]})
+		out = append(out, Match{Start: pos, End: end, Keyword: text[pos:end], Group: endGroup})
 		_, sz := utf8.DecodeRuneInString(text[end:]) // 命中后从其下一 rune 重启
 		pos = end + sz
 	}
@@ -318,15 +340,15 @@ func buildBadCharTable(kw string) [256]int {
 // ACBM 的差距；与 stringsIndexFindAll（无跳跃、SIMD）互为另一端参照。
 // 坏字符表由调用方预构建传入：其他参照的构建成本（自动机、归并表）
 // 均在基准循环外，BM 表同口径处理。
-func bmFindAll(keywords []string, tables [][256]int, text string) []Match {
+func bmFindAll(keywords []string, tables [][256]int, groups []int, text string) []Match {
 	n := len(text)
 	var occs []interval
-	for i, kw := range keywords {
+	for idx, kw := range keywords {
 		m := len(kw)
 		if m == 0 || m > n {
 			continue
 		}
-		table := tables[i] // 表由调用方预构建（与其他参照的构建成本同置循环外）
+		table := tables[idx] // 表由调用方预构建（与其他参照的构建成本同置循环外）
 		for i := 0; i+m <= n; {
 			// 窗口 [i, i+m)：自右向左比较，失配按坏字符表跳跃
 			j := m - 1
@@ -334,7 +356,7 @@ func bmFindAll(keywords []string, tables [][256]int, text string) []Match {
 				j--
 			}
 			if j < 0 {
-				occs = append(occs, interval{i, i + m})
+				occs = append(occs, interval{i, i + m, idx})
 				i += m // 同关键词非重叠枚举；跨词重叠在归并时处理
 				continue
 			}
@@ -343,7 +365,7 @@ func bmFindAll(keywords []string, tables [][256]int, text string) []Match {
 			i += max(table[text[i+j]]-(m-1-j), 1)
 		}
 	}
-	return collectLeftmostLongest(text, occs)
+	return collectLeftmostLongest(text, occs, groups)
 }
 
 // stringsIndexFindAll 是逐关键词 strings.Index 参照实现：不建自动机，
@@ -355,27 +377,27 @@ func bmFindAll(keywords []string, tables [][256]int, text string) []Match {
 // 16–32 字节），已是单串搜索的最快形态；换成「文本下标外循环 × 逐关键
 // 词逐字节比较」的纯标量双循环，同为 O(K·n) 但常数差一个向量宽度
 // （约 1500 万次标量迭代 vs 约 50 万次向量迭代），只会持平或更慢。
-func stringsIndexFindAll(keywords []string, text string) []Match {
+func stringsIndexFindAll(keywords []string, groups []int, text string) []Match {
 	var occs []interval
-	for _, kw := range keywords {
+	for idx, kw := range keywords {
 		for i := 0; ; {
 			j := strings.Index(text[i:], kw)
 			if j < 0 {
 				break
 			}
 			i += j
-			occs = append(occs, interval{i, i + len(kw)})
+			occs = append(occs, interval{i, i + len(kw), idx})
 			i += len(kw) // 同关键词非重叠枚举；跨词重叠在归并时处理
 		}
 	}
-	return collectLeftmostLongest(text, occs)
+	return collectLeftmostLongest(text, occs, groups)
 }
 
 // stringsIndexFindNext 是逐词 strings.Index 的「首命中即停」参照：每个
 // 关键词只做一次全文搜索取最左出现，比较后返回全局第一个——未触及的
 // 文本不再有任何搜索调用。与 FindNext 语义一致，用于量化首命中即停在
 // 朴素做法下的收益，对照 BenchmarkFindNextFirst。
-func stringsIndexFindNext(keywords []string, text string, offset int) (Match, bool) {
+func stringsIndexFindNext(keywords []string, groups []int, text string, offset int) (Match, bool) {
 	if offset < 0 {
 		offset = 0
 	}
@@ -384,14 +406,14 @@ func stringsIndexFindNext(keywords []string, text string, offset int) (Match, bo
 	}
 	best := Match{}
 	found := false
-	for _, kw := range keywords {
+	for idx, kw := range keywords {
 		j := strings.Index(text[offset:], kw)
 		if j < 0 {
 			continue
 		}
 		s, e := offset+j, offset+j+len(kw)
 		if !found || s < best.Start || (s == best.Start && e > best.End) {
-			best, found = Match{Start: s, End: e, Keyword: kw}, true
+			best, found = Match{Start: s, End: e, Keyword: kw, Group: groups[idx]}, true
 		}
 	}
 	return best, found
@@ -408,11 +430,12 @@ func TestBaselineEquiv(t *testing.T) {
 		matcher  Matcher
 		keywords []string
 		tables   [][256]int
+		groups   []int
 		texts    [2]string
 	}{
-		{"稀疏词库", benchMatcherSparse, benchKeywordsSparse, benchBMSparse,
+		{"稀疏词库", benchMatcherSparse, benchKeywordsSparse, benchBMSparse, benchGroupIDSparse,
 			[2]string{benchTextZhSparse, benchTextMixSparse}},
-		{"重叠词库", benchMatcherOverlap, benchKeywordsOverlap, benchBMOverlap,
+		{"重叠词库", benchMatcherOverlap, benchKeywordsOverlap, benchBMOverlap, benchGroupIDOverlap,
 			[2]string{benchTextZhOverlap, benchTextMixOverlap}},
 	} {
 		for _, text := range []struct{ name, body string }{
@@ -422,15 +445,15 @@ func TestBaselineEquiv(t *testing.T) {
 			want := d.matcher.FindAll(text.body)
 			for _, got := range [][]Match{
 				trieFindAll(d.matcher, text.body),
-				bmFindAll(d.keywords, d.tables, text.body),
-				stringsIndexFindAll(d.keywords, text.body),
+				bmFindAll(d.keywords, d.tables, d.groups, text.body),
+				stringsIndexFindAll(d.keywords, d.groups, text.body),
 			} {
 				if !reflect.DeepEqual(got, want) {
 					t.Fatalf("%s/%s: 参照实现与 FindAll 不一致（%d vs %d 条）",
 						d.name, text.name, len(got), len(want))
 				}
 			}
-			next, ok := stringsIndexFindNext(d.keywords, text.body, 0)
+			next, ok := stringsIndexFindNext(d.keywords, d.groups, text.body, 0)
 			if !ok {
 				t.Fatalf("%s/%s: stringsIndexFindNext 应有命中", d.name, text.name)
 			}
@@ -528,56 +551,56 @@ func BenchmarkTrieMixedOverlap(b *testing.B) {
 // BenchmarkBMChinese 纯中文长文本、逐关键词 Boyer-Moore 坏字符搜索（稀疏词库，参照）。
 func BenchmarkBMChinese(b *testing.B) {
 	for b.Loop() {
-		benchSink = bmFindAll(benchKeywordsSparse, benchBMSparse, benchTextZhSparse)
+		benchSink = bmFindAll(benchKeywordsSparse, benchBMSparse, benchGroupIDSparse, benchTextZhSparse)
 	}
 }
 
 // BenchmarkBMMixed 中英混合长文本、逐关键词 Boyer-Moore 坏字符搜索（稀疏词库，参照）。
 func BenchmarkBMMixed(b *testing.B) {
 	for b.Loop() {
-		benchSink = bmFindAll(benchKeywordsSparse, benchBMSparse, benchTextMixSparse)
+		benchSink = bmFindAll(benchKeywordsSparse, benchBMSparse, benchGroupIDSparse, benchTextMixSparse)
 	}
 }
 
 // BenchmarkBMChineseOverlap 纯中文长文本、逐关键词 Boyer-Moore 坏字符搜索（重叠词库，参照）。
 func BenchmarkBMChineseOverlap(b *testing.B) {
 	for b.Loop() {
-		benchSink = bmFindAll(benchKeywordsOverlap, benchBMOverlap, benchTextZhOverlap)
+		benchSink = bmFindAll(benchKeywordsOverlap, benchBMOverlap, benchGroupIDOverlap, benchTextZhOverlap)
 	}
 }
 
 // BenchmarkBMMixedOverlap 中英混合长文本、逐关键词 Boyer-Moore 坏字符搜索（重叠词库，参照）。
 func BenchmarkBMMixedOverlap(b *testing.B) {
 	for b.Loop() {
-		benchSink = bmFindAll(benchKeywordsOverlap, benchBMOverlap, benchTextMixOverlap)
+		benchSink = bmFindAll(benchKeywordsOverlap, benchBMOverlap, benchGroupIDOverlap, benchTextMixOverlap)
 	}
 }
 
 // BenchmarkStringsIndexChinese 纯中文长文本、逐关键词 strings.Index（稀疏词库，参照：标准库 SIMD 单串搜索）。
 func BenchmarkStringsIndexChinese(b *testing.B) {
 	for b.Loop() {
-		benchSink = stringsIndexFindAll(benchKeywordsSparse, benchTextZhSparse)
+		benchSink = stringsIndexFindAll(benchKeywordsSparse, benchGroupIDSparse, benchTextZhSparse)
 	}
 }
 
 // BenchmarkStringsIndexMixed 中英混合长文本、逐关键词 strings.Index（稀疏词库，参照）。
 func BenchmarkStringsIndexMixed(b *testing.B) {
 	for b.Loop() {
-		benchSink = stringsIndexFindAll(benchKeywordsSparse, benchTextMixSparse)
+		benchSink = stringsIndexFindAll(benchKeywordsSparse, benchGroupIDSparse, benchTextMixSparse)
 	}
 }
 
 // BenchmarkStringsIndexChineseOverlap 纯中文长文本、逐关键词 strings.Index（重叠词库，参照）。
 func BenchmarkStringsIndexChineseOverlap(b *testing.B) {
 	for b.Loop() {
-		benchSink = stringsIndexFindAll(benchKeywordsOverlap, benchTextZhOverlap)
+		benchSink = stringsIndexFindAll(benchKeywordsOverlap, benchGroupIDOverlap, benchTextZhOverlap)
 	}
 }
 
 // BenchmarkStringsIndexMixedOverlap 中英混合长文本、逐关键词 strings.Index（重叠词库，参照）。
 func BenchmarkStringsIndexMixedOverlap(b *testing.B) {
 	for b.Loop() {
-		benchSink = stringsIndexFindAll(benchKeywordsOverlap, benchTextMixOverlap)
+		benchSink = stringsIndexFindAll(benchKeywordsOverlap, benchGroupIDOverlap, benchTextMixOverlap)
 	}
 }
 
@@ -585,7 +608,7 @@ func BenchmarkStringsIndexMixedOverlap(b *testing.B) {
 // 50→100 个关键词各做一次全文搜索，对照 BenchmarkFindNextFirst）。
 func BenchmarkStringsIndexNextFirst(b *testing.B) {
 	for b.Loop() {
-		m, ok := stringsIndexFindNext(benchKeywordsSparse, benchTextMixSparse, 0)
+		m, ok := stringsIndexFindNext(benchKeywordsSparse, benchGroupIDSparse, benchTextMixSparse, 0)
 		if !ok {
 			b.Fatal("应有命中")
 		}
@@ -596,7 +619,7 @@ func BenchmarkStringsIndexNextFirst(b *testing.B) {
 // BenchmarkStringsIndexNextFirstOverlap 逐词 strings.Index 找第一个命中（重叠词库）。
 func BenchmarkStringsIndexNextFirstOverlap(b *testing.B) {
 	for b.Loop() {
-		m, ok := stringsIndexFindNext(benchKeywordsOverlap, benchTextMixOverlap, 0)
+		m, ok := stringsIndexFindNext(benchKeywordsOverlap, benchGroupIDOverlap, benchTextMixOverlap, 0)
 		if !ok {
 			b.Fatal("应有命中")
 		}

@@ -345,10 +345,11 @@ func TestChineseMatching(t *testing.T) {
 		text string
 		want []Match
 	}{
-		// "你好" 与 "世界" 同被 "你好世界" 遮蔽/替换：只剩最长的一条
-		{"你好世界", []Match{{0, 12, "你好世界"}}},
+		// "你好" 与 "世界" 同被 "你好世界" 遮蔽/替换：只剩最长的一条。
+		// 组号 = 去重词库下标：你好 0 / 世界 1 / 你好世界 2。
+		{"你好世界", []Match{{Start: 0, End: 12, Keyword: "你好世界", Group: 2}}},
 		// 逗号（3 字节）打断后各自独立命中
-		{"你好，世界", []Match{{0, 6, "你好"}, {9, 15, "世界"}}},
+		{"你好，世界", []Match{{Start: 0, End: 6, Keyword: "你好", Group: 0}, {Start: 9, End: 15, Keyword: "世界", Group: 1}}},
 	}
 	for _, tc := range tests {
 		got := m.FindAll(tc.text)
@@ -368,17 +369,18 @@ func TestEdgeCases(t *testing.T) {
 		// "AA" 在 "AAAA" 中自重叠两次：最左最长取 [0,2)，随后 [2,4) 再取
 		m := mustNew(t, []string{"AA"})
 		assertMatches(t, "AAAA", "自重叠", m.FindAll("AAAA"),
-			[]Match{{0, 2, "AA"}, {2, 4, "AA"}})
+			[]Match{{Start: 0, End: 2, Keyword: "AA"}, {Start: 2, End: 4, Keyword: "AA"}})
 		// "ABA" 在 "ABABA"：[0,3) 与 [2,5) 重叠，最左最长取 [0,3)，余下 "BA" 无命中
 		m2 := mustNew(t, []string{"ABA"})
 		assertMatches(t, "ABABA", "自重叠2", m2.FindAll("ABABA"),
-			[]Match{{0, 3, "ABA"}})
+			[]Match{{Start: 0, End: 3, Keyword: "ABA"}})
 	})
 	t.Run("关键词长于文本", func(t *testing.T) {
-		// 长词 "人工智能" 未完整出现；短词 "人" 在 [0,3) 完整出现 → 正常命中
+		// 长词 "人工智能" 未完整出现；短词 "人" 在 [0,3) 完整出现 → 正常命中。
+		// 组号：人工智能 0 / 人 1
 		m := mustNew(t, []string{"人工智能", "人"})
 		assertMatches(t, "人工", "长词截断", m.FindAll("人工"),
-			[]Match{{0, 3, "人"}})
+			[]Match{{Start: 0, End: 3, Keyword: "人", Group: 1}})
 		// 词库只有长词时，截断文本无命中
 		m2 := mustNew(t, []string{"人工智能"})
 		if got := m2.FindAll("人工"); got != nil {
@@ -388,27 +390,27 @@ func TestEdgeCases(t *testing.T) {
 	t.Run("单字节词逐字符全命中", func(t *testing.T) {
 		m := mustNew(t, []string{"a"})
 		assertMatches(t, "aaaa", "单字节", m.FindAll("aaaa"),
-			[]Match{{0, 1, "a"}, {1, 2, "a"}, {2, 3, "a"}, {3, 4, "a"}})
+			[]Match{{Start: 0, End: 1, Keyword: "a"}, {Start: 1, End: 2, Keyword: "a"}, {Start: 2, End: 3, Keyword: "a"}, {Start: 3, End: 4, Keyword: "a"}})
 	})
 	t.Run("Emoji 四字节 rune", func(t *testing.T) {
-		// 😀 = F0 9F 98 80（4 字节）：a[0,1) 笑[1,4) 😀[4,8) b[8,9)
+		// 😀 = F0 9F 98 80（4 字节）：a[0,1) 笑[1,4) 😀[4,8) b[8,9)。组号：😀 0 / 笑😀 1
 		m := mustNew(t, []string{"😀", "笑😀"})
 		assertMatches(t, "a笑😀b", "emoji", m.FindAll("a笑😀b"),
-			[]Match{{1, 8, "笑😀"}})
+			[]Match{{Start: 1, End: 8, Keyword: "笑😀", Group: 1}})
 		// 单 Emoji 词库：😀 在文本中单独出现
 		m2 := mustNew(t, []string{"😀"})
 		assertMatches(t, "x😀y", "emoji2", m2.FindAll("x😀y"),
-			[]Match{{1, 5, "😀"}})
+			[]Match{{Start: 1, End: 5, Keyword: "😀"}})
 	})
 	t.Run("重复输入词去重不重复输出", func(t *testing.T) {
 		m := mustNew(t, []string{"中国", "中国", "中国"})
 		assertMatches(t, "中国中国", "去重", m.FindAll("中国中国"),
-			[]Match{{0, 6, "中国"}, {6, 12, "中国"}})
+			[]Match{{Start: 0, End: 6, Keyword: "中国"}, {Start: 6, End: 12, Keyword: "中国"}})
 	})
 	t.Run("关键词即整个文本", func(t *testing.T) {
 		m := mustNew(t, []string{"中国人"})
 		assertMatches(t, "中国人", "整文本", m.FindAll("中国人"),
-			[]Match{{0, 9, "中国人"}})
+			[]Match{{Start: 0, End: 9, Keyword: "中国人"}})
 	})
 }
 
@@ -438,7 +440,7 @@ func TestNewRejectsInvalidKeywords(t *testing.T) {
 	// 对照：非法字节只出现在文本侧时行为健全（每个坏字节按 RuneError 前进 1 字节）
 	m := mustNew(t, []string{"中", "国"})
 	text := string([]byte{0xB8, 0xAD, 0xE4, 0xB8, 0xAD, 0xE5, 0x9B, 0xBD}) // 坏×2 + 中 + 国
-	assertMatches(t, text, "非法文本不漏扫", m.FindAll(text), []Match{{2, 5, "中"}, {5, 8, "国"}})
+	assertMatches(t, text, "非法文本不漏扫", m.FindAll(text), []Match{{Start: 2, End: 5, Keyword: "中"}, {Start: 5, End: 8, Keyword: "国", Group: 1}})
 }
 
 // ---------------------------------------------------------------------------
@@ -478,28 +480,31 @@ func TestGreedySemantics(t *testing.T) {
 		text     string
 		want     []Match
 	}{
+		// 各用例组号 = 去重词库下标（本表未用 WithSynonyms）：
+		// {"中国","中国人"}→中国 0/中国人 1；{"国","人","中国人"}→国 0/人 1/中国人 2。
 		// "我是中国人"：我是 6 字节，"中国人" = [6,15)
-		{"前缀取最长", []string{"中国", "中国人"}, "我是中国人", []Match{{6, 15, "中国人"}}},
-		{"前缀未完整出现取短词", []string{"中", "中毒"}, "中x", []Match{{0, 3, "中"}}},
-		{"重叠取更左", []string{"上海", "海口"}, "上海口", []Match{{0, 6, "上海"}}},
-		{"同结尾取更长", []string{"他", "其他"}, "其他", []Match{{0, 6, "其他"}}},
+		{"前缀取最长", []string{"中国", "中国人"}, "我是中国人", []Match{{Start: 6, End: 15, Keyword: "中国人", Group: 1}}},
+		{"前缀未完整出现取短词", []string{"中", "中毒"}, "中x", []Match{{Start: 0, End: 3, Keyword: "中"}}},
+		{"重叠取更左", []string{"上海", "海口"}, "上海口", []Match{{Start: 0, End: 6, Keyword: "上海"}}},
+		// 同起点真包含取最长：组号随更长关键词转移（他 0 → 其他 1）
+		{"同结尾取更长", []string{"他", "其他"}, "其他", []Match{{Start: 0, End: 6, Keyword: "其他", Group: 1}}},
 		// 上海=[0,6) 人=[6,9) 北京=[9,15)
-		{"不重叠全输出", []string{"上海", "北京"}, "上海人北京", []Match{{0, 6, "上海"}, {9, 15, "北京"}}},
-		{"嵌套前缀链", []string{"a", "ab", "abc"}, "xabcx", []Match{{1, 4, "abc"}}},
-		{"连续同词", []string{"a", "ab"}, "abab", []Match{{0, 2, "ab"}, {2, 4, "ab"}}},
+		{"不重叠全输出", []string{"上海", "北京"}, "上海人北京", []Match{{Start: 0, End: 6, Keyword: "上海"}, {Start: 9, End: 15, Keyword: "北京", Group: 1}}},
+		{"嵌套前缀链", []string{"a", "ab", "abc"}, "xabcx", []Match{{Start: 1, End: 4, Keyword: "abc", Group: 2}}},
+		{"连续同词", []string{"a", "ab"}, "abab", []Match{{Start: 0, End: 2, Keyword: "ab", Group: 1}, {Start: 2, End: 4, Keyword: "ab", Group: 1}}},
 		// 真包含关系一律取最长："中国人"(0,9) 起点最左，遮蔽 "国"(3,6) 与 "人"(6,9)
-		{"真包含取最长", []string{"国", "人", "中国人"}, "中国人", []Match{{0, 9, "中国人"}}},
+		{"真包含取最长", []string{"国", "人", "中国人"}, "中国人", []Match{{Start: 0, End: 9, Keyword: "中国人", Group: 2}}},
 		// 断词结算："梦" 与 "人" 不匹配 → "中国人" 断词，fail 规则结算 "国"(3,6)
-		{"断词后fail结算短词", []string{"国", "人", "中国人"}, "中国梦", []Match{{3, 6, "国"}}},
+		{"断词后fail结算短词", []string{"国", "人", "中国人"}, "中国梦", []Match{{Start: 3, End: 6, Keyword: "国"}}},
 		// 更左候选逐级弹出链尾：a(start=2)→被 ba(1) 弹出→被 cba(0) 弹出
-		{"逐级弹出至最左", []string{"a", "ba", "cba"}, "cba", []Match{{0, 3, "cba"}}},
+		{"逐级弹出至最左", []string{"a", "ba", "cba"}, "cba", []Match{{Start: 0, End: 3, Keyword: "cba", Group: 2}}},
 		// 长词断词后，其内部短词按最左最长独立结算："中国人" 断于 "梦"，
 		// [0,9) "中国人" 已入链；随后 root 重新扫描，无更左候选 → 输出 "中国人"
 		{
 			"断词后短词独立结算",
 			[]string{"国", "人", "中国人"},
 			"中国人梦国人",
-			[]Match{{0, 9, "中国人"}, {12, 15, "国"}, {15, 18, "人"}},
+			[]Match{{Start: 0, End: 9, Keyword: "中国人", Group: 2}, {Start: 12, End: 15, Keyword: "国"}, {Start: 15, End: 18, Keyword: "人", Group: 1}},
 		},
 	}
 	for _, tc := range tests {
@@ -524,18 +529,19 @@ func TestFindAllOverlapping(t *testing.T) {
 		want     []Match
 	}{
 		// 以 pos=6 结束：国(3,6)；以 pos=9 结束：中国人(0,9) 长 9 先于 人(6,9) 长 3
+		// （组号：国 0 / 人 1 / 中国人 2）
 		{
 			"包含关系全量保留",
 			[]string{"国", "人", "中国人"},
 			"中国人",
-			[]Match{{3, 6, "国"}, {0, 9, "中国人"}, {6, 9, "人"}},
+			[]Match{{Start: 3, End: 6, Keyword: "国"}, {Start: 0, End: 9, Keyword: "中国人", Group: 2}, {Start: 6, End: 9, Keyword: "人", Group: 1}},
 		},
 		// 上海(0,6)、海口(3,9) 重叠邻居均保留（FindAll 仅返回 上海）
 		{
 			"重叠邻居均保留",
 			[]string{"上海", "海口"},
 			"上海口",
-			[]Match{{0, 6, "上海"}, {3, 9, "海口"}},
+			[]Match{{Start: 0, End: 6, Keyword: "上海"}, {Start: 3, End: 9, Keyword: "海口", Group: 1}},
 		},
 		{"无命中返回 nil", []string{"中国"}, "abc", nil},
 		{"空文本返回 nil", []string{"中国"}, "", nil},
@@ -544,7 +550,7 @@ func TestFindAllOverlapping(t *testing.T) {
 			"嵌套前缀同End降序",
 			[]string{"a", "ab", "abc"},
 			"xabc",
-			[]Match{{1, 2, "a"}, {1, 3, "ab"}, {1, 4, "abc"}},
+			[]Match{{Start: 1, End: 2, Keyword: "a"}, {Start: 1, End: 3, Keyword: "ab", Group: 1}, {Start: 1, End: 4, Keyword: "abc", Group: 2}},
 		},
 	}
 	for _, tc := range tests {
@@ -625,12 +631,13 @@ func TestInvalidUTF8(t *testing.T) {
 	text := string([]byte{0xE4, 0xB8, 0xAD, 0xE6, 0x88, 'x', 0xE5, 0x9B, 0xBD})
 	m := mustNew(t, []string{"中", "国", "中x"})
 	// 能正常返回即说明未 panic；同时要求坏字节段不造成漏扫："国" 仍命中
+	// （组号：中 0 / 国 1 / 中x 2）
 	got := m.FindAll(text)
-	assertMatches(t, text, "非法UTF-8文本", got, []Match{{0, 3, "中"}, {6, 9, "国"}})
+	assertMatches(t, text, "非法UTF-8文本", got, []Match{{Start: 0, End: 3, Keyword: "中"}, {Start: 6, End: 9, Keyword: "国", Group: 1}})
 
 	// 从坏字节内部起步的 FindNext 也不 panic，且对齐后结果正确
 	mt, ok := m.FindNext(text, 4) // 偏移 4 落在续字节 0x88 上，需向后对齐到 rune 边界
-	if !ok || mt != (Match{Start: 6, End: 9, Keyword: "国"}) {
+	if !ok || mt != (Match{Start: 6, End: 9, Keyword: "国", Group: 1}) {
 		t.Errorf("FindNext(text,4) = (%+v, %v), 期望 ({Start:6 End:9 Keyword:国}, true)", mt, ok)
 	}
 }
@@ -648,12 +655,12 @@ func TestFindNext(t *testing.T) {
 		want   Match
 		ok     bool
 	}{
-		{0, Match{2, 8, "中国"}, true},
-		{8, Match{10, 16, "北京"}, true},
-		{16, Match{}, false},           // offset == len(text)
-		{17, Match{}, false},           // offset 越界
-		{-5, Match{2, 8, "中国"}, true},  // 负数按 0 处理
-		{3, Match{10, 16, "北京"}, true}, // 3 落在 "中" 的续字节上，对齐后继续扫描
+		{0, Match{Start: 2, End: 8, Keyword: "中国"}, true},
+		{8, Match{Start: 10, End: 16, Keyword: "北京", Group: 1}, true},
+		{16, Match{}, false}, // offset == len(text)
+		{17, Match{}, false}, // offset 越界
+		{-5, Match{Start: 2, End: 8, Keyword: "中国"}, true},            // 负数按 0 处理
+		{3, Match{Start: 10, End: 16, Keyword: "北京", Group: 1}, true}, // 3 落在 "中" 的续字节上，对齐后继续扫描
 	}
 	for _, tc := range tests {
 		got, ok := m.FindNext(text, tc.offset)
@@ -708,20 +715,22 @@ func naiveSearch(keywords []string, text string) []Match {
 	var out []Match
 	for pos := 0; pos < len(text); {
 		bestStart, bestEnd := -1, -1
-		for _, kw := range keywords {
+		bestIdx := 0
+		for idx, kw := range keywords {
 			j := strings.Index(text[pos:], kw)
 			if j < 0 {
 				continue
 			}
 			s, e := pos+j, pos+j+len(kw)
 			if bestStart < 0 || s < bestStart || (s == bestStart && e > bestEnd) {
-				bestStart, bestEnd = s, e
+				bestStart, bestEnd, bestIdx = s, e, idx
 			}
 		}
 		if bestStart < 0 {
 			break
 		}
-		out = append(out, Match{bestStart, bestEnd, text[bestStart:bestEnd]})
+		// 组号 = 去重词库下标（本 oracle 词库均未声明同义词组）
+		out = append(out, Match{Start: bestStart, End: bestEnd, Keyword: text[bestStart:bestEnd], Group: bestIdx})
 		pos = bestEnd
 	}
 	return out
@@ -745,7 +754,7 @@ func TestRandomAgainstNaive(t *testing.T) {
 				i, kws, text, len(got), got, len(want), want)
 		}
 		for j := range got {
-			if got[j].Start != want[j].Start || got[j].End != want[j].End || got[j].Keyword != want[j].Keyword {
+			if got[j] != want[j] {
 				t.Fatalf("第 %d 组第 %d 条命中不一致\n词库: %q\n文本: %q\nFindAll: %v\nnaive  : %v",
 					i, j, kws, text, got, want)
 			}
@@ -818,6 +827,6 @@ func TestASCIISkipCorrectness(t *testing.T) {
 	got := m.FindAll(text)
 	assertMatches(t, text, "ASCII 混排文本", got, []Match{
 		{Start: 20, End: 26, Keyword: "上海"},
-		{Start: 32, End: 38, Keyword: "北京"},
+		{Start: 32, End: 38, Keyword: "北京", Group: 1},
 	})
 }

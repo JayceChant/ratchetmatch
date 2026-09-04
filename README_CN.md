@@ -13,6 +13,11 @@
 
 针对中文优化的 ACBM（Aho-Corasick + Boyer-Moore）多模式匹配库：一次构建词库自动机，对每条长文本单遍扫描，返回全部关键词命中。零第三方依赖，仅使用 Go 标准库。
 
+- **同义词分组**：`WithSynonyms` 声明同义词组，命中自带组号（`Match.Group`）——同义概念天然归并，无需词后查表归拢；分组不改变匹配语义，可与大小写折叠组合。
+- **大小写折叠**：`WithCaseFold` 获得 `strings.EqualFold` 语义（逐 rune SimpleFold 轨道），大小写变体合一不漏报，查询开销可忽略。
+- **三种查询形态**：`FindAll` 非重叠最左最长（高亮/过滤）、`FindAllOverlapping` 全量出现（词频/索引）、`FindNext` 首停（超长文本按需迭代，约 10x）。
+- **为扫描而生**：稀疏转移表 + 失败指针摊还 O(1)，root 态坏字符跳跃（中英混合 ~1.4x）；构建后只读、查询零分配，可无锁并发常驻数月。
+
 ## 适用范围
 
 **适合**：词库固定、目标文本多变——一次 `New` 构建后，对大量长文本反复查询（内容过滤、审计、风控等流式扫描场景）。
@@ -57,6 +62,7 @@ go test -bench . -run '^$'
 - **BM 坏字符跳跃**：自动机处于 root 态时，用「词库首字符集 + 256 位字节过滤器」批量跳过不可能出现匹配起始的文本段，中英混合文本约 1.4x 加速（任何匹配的起始 rune 必为词首字符，跳跃判据等价安全、不漏报）。
 - **位置按字节计量**：`Match.Start/End` 为字节偏移，`text[Start:End]` 可直接切片取关键词。不提供 rune 下标 API——`[]rune` 预转换会使 ASCII 文本瞬时内存 +300%、跳跃与首停优化失效。
 - **非重叠最左最长语义**：起点最小优先、同一起点取最长（真包含关系一律输出最长匹配）；结果确定，与查找方式无关。
+- **同义词分组下沉为输出元数据**：组员各自成词入 trie（整词级等价无法像大小写折叠那样按 rune 轨道合一），组号存为节点的平行数组、命中时随区间带出——分组绝不参与最左最长裁决，查询热路径零新增分支。
 - **无锁并发**：`Matcher` 构建后只读，内部为紧凑连续数组布局（近乎无指针），查询零分配，Go GC 标记成本接近常数——适合词库常驻内存数月的服务。
 - **容错**：非法 UTF-8 文本不 panic、不漏扫后续内容。
 
@@ -74,7 +80,7 @@ for _, m := range matcher.FindAll(text) {
 }
 ```
 
-完整可运行示例（含输出）见 `example_test.go`；更多拿来即用的完整程序在 `example/` 目录（`go run ./basic/`、`./semantics/`、`./iterate/`、`./wordcount/`——语义对照、按需迭代、词频统计，每个都是可整体复制到自己项目里的自包含单文件）。中文每字占 3 字节、ASCII 每字符 1 字节；匹配是精确匹配，`Beijing` 不会命中 `北京`。需要字符序号时用 `utf8.RuneCountInString(text[:m.Start])` 换算。
+完整可运行示例（含输出）见 `example_test.go`；更多拿来即用的完整程序在 `example/` 目录（`go run ./basic/`、`./semantics/`、`./iterate/`、`./wordcount/`、`./synonyms/`——语义对照、按需迭代、词频统计、同义词分组，每个都是可整体复制到自己项目里的自包含单文件）。中文每字占 3 字节、ASCII 每字符 1 字节；匹配是精确匹配，`Beijing` 不会命中 `北京`。需要字符序号时用 `utf8.RuneCountInString(text[:m.Start])` 换算。
 
 ## 按需迭代：超长文本首命中即停
 
@@ -84,11 +90,14 @@ for _, m := range matcher.FindAll(text) {
 
 | 标识 | 说明 |
 |---|---|
-| `New(keywords []string) (*Matcher, error)` | 构建不可变 `Matcher`。词库为空、含空串、含非法 UTF-8 或 U+FFFD 字节返回可区分的错误；重复关键词去重 |
+| `New(keywords []string, opts ...Option) (*Matcher, error)` | 构建不可变 `Matcher`。词库（关键词与 `WithSynonyms` 组员合并后）为空、含空串、含非法 UTF-8 或 U+FFFD 字节返回可区分的错误；重复关键词去重；同一词出现在两个声明同义词组报错 |
 | `(*Matcher) FindAll(text string) []Match` | 全部命中，按 `Start` 升序；无命中返回 `nil` |
 | `(*Matcher) FindAllOverlapping(text string) []Match` | 全部出现（含互相重叠者），按 `End` 升序、同 `End` 长度降序；适合词频统计、索引构建，开销输出敏感 O(n+K) |
 | `(*Matcher) FindNext(text string, offset int) (Match, bool)` | 从 `offset` 返回首个命中，找到即停。`offset<0` 按 0；`>=len(text)` 或无命中返回 `(Match{}, false)`；落在多字节字符中间时向后对齐 rune 边界 |
-| `Match{Start, End int; Keyword string}` | 一次命中；`text[Start:End] == Keyword` 恒成立 |
+| `(*Matcher) CaseFold() bool` | 报告是否为大小写折叠模式（`WithCaseFold` 构建） |
+| `(*Matcher) WordGroup(g int) []string` | 返回同义词组 g 的成员词（折叠模式为归一形）；返回内部只读切片，越界组号返回 `nil` |
+| `(*Matcher) WordGroups() [][]string` | 返回全部同义词组，按组号升序（下标即 `Match.Group`）；外层切片可自由重排，元素为内部只读切片 |
+| `Match{Start, End int; Keyword string; Group int}` | 一次命中；`text[Start:End] == Keyword` 恒成立。`Group` 为命中词的同义词组号，恒有效（未声明的词自成单元素组） |
 
 ## 匹配语义（非重叠最左最长）
 
@@ -123,6 +132,28 @@ fm.CaseFold()                    // true
 - **语义收益**：大小写混排文本上 fold 能命中 exact 漏掉的全部变体——ASCII 基准中 fold 多报约 1000 条（首字母大写词），扫描耗时无可测差异。
 
 经验法则：只要需要大小写不敏感就开 `WithCaseFold()`——查询侧开销可忽略；仅超大词库（>1 万关键词）构建时才可能感知到构建开销。
+
+### 同义词分组
+
+需要把同义词在结果里天然归成一组（语义上的「fold」），不必自己维护词→组的映射再事后归并：`WithSynonyms` 声明同义词组，组员自动并入词库，命中的 `Match.Group` 直接携带组号：
+
+```go
+m, _ := ratchetmatch.New([]string{"服务器"},
+    ratchetmatch.WithSynonyms([][]string{
+        {"电脑", "计算机", "PC"}, // 组 0：组员自动入库
+    }))
+m.FindAll("电脑和服务器")
+// 电脑(0,6, Group=0)、服务器(9,18, Group=1)——未声明的词自成单元素组
+m.WordGroup(0) // [电脑 计算机 PC]
+m.WordGroups() // [[电脑 计算机 PC] [服务器]]——下标即组号
+```
+
+要点：
+
+- **分组不改变匹配语义**：非重叠最左最长照旧裁决（词库同时含「电脑」与「电脑城」时，文本「电脑城」命中的是「电脑城」，带着它自己的组）。有/无分组构建的命中区间逐条一致，可直接按 `count[m.Group]++` 聚合。
+- **分区编号、恒有效**：声明组按声明顺序编号 0..k-1；未声明分组的词按去重词库序获得单元素组。任何 `Match.Group` 都可直接传给 `WordGroup`；`WordGroups()` 一次返回全部组。
+- **与 `WithCaseFold` 正交**：组合使用时词身份按折叠归一形判定——`"PC"` 与 `"pc"` 归一同形，同组自然合一、分属两组则报错；`Group` 兼作折叠命中的规范词身份（`Keyword` 是大小写不定的文本切片，按词计数无需再归一）。
+- **校验**：空组、组员空串/非法 UTF-8/含 U+FFFD、同一词出现在两个声明组均报错（错误信息含组号与成员下标，可区分原因）；组内重复成员自动去重。词库可仅由组构成（`New(nil, WithSynonyms(...))`）。
 
 算法原理、API 契约与验收场景的权威描述见 `spec/spec.md`。
 

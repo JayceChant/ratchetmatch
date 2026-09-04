@@ -47,5 +47,6 @@ func main() {
 	//   fm, err := ratchetmatch.New([]string{"go"}, ratchetmatch.WithCaseFold())
 	//   fm.FindAll("GO") // 命中 go；fm.CaseFold() == true
 	// 同一词库需要两种模式时，分别 New 两个实例即可。
+	// 同义词概念归并（命中自带组号）见 ../synonyms/ 示例。
 	fmt.Printf("共命中 %d 处\n", len(hits))
 }

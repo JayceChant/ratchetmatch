@@ -24,31 +24,39 @@ type nodeAPI interface {
 	// 精确节点按关键词字节长回退，折叠节点按关键词 rune 数回退（轨道成员
 	// 字节宽可不同，见 runeStartBack）。text 为被扫描文本。
 	start(text string, pos, i int) int
+	// group 返回第 i 个输出的同义词组号（与 outLens/outRunes 平行的 outGroups
+	// 下标，见 buildPartition 的分区语义）。
+	group(i int) int32
 }
 
 // exactNode 是精确自动机的查询期状态：outLens 为以当前状态结束的全部关键词
 // 字节长度，严格降序（自身 + 失败链继承；自身必为真后缀关键词的最长者）；
-// nil 表示无输出。命中起点 = pos − 关键词字节长（文本消耗恒等于关键词字节长）。
+// outGroups 与 outLens 平行的组号。nil 表示无输出。
+// 命中起点 = pos − 关键词字节长（文本消耗恒等于关键词字节长）。
 type exactNode struct {
-	base    int32   // 自有边区间在 transKeys/transVals 中的起始下标
-	count   int32   // 自有边条数
-	fail    int32   // 失败指针：已匹配部分的最长真后缀（且是词库中某关键词前缀）对应的节点；无则指向 root
-	outLens []int32 // 全部输出关键词字节长，严格降序；nil 表示无
+	base      int32   // 自有边区间在 transKeys/transVals 中的起始下标
+	count     int32   // 自有边条数
+	fail      int32   // 失败指针：已匹配部分的最长真后缀（且是词库中某关键词前缀）对应的节点；无则指向 root
+	outLens   []int32 // 全部输出关键词字节长，严格降序；nil 表示无
+	outGroups []int32 // 与 outLens 平行的组号（分区语义见 resolveSynonyms / build.go）
 }
 
 func (n exactNode) seg() (base, count, fail int32) { return n.base, n.count, n.fail }
 func (n exactNode) outs() int                      { return len(n.outLens) }
 func (n exactNode) start(_ string, pos, i int) int { return pos - int(n.outLens[i]) }
+func (n exactNode) group(i int) int32              { return n.outGroups[i] }
 
 // foldNode 是折叠自动机的查询期状态：outRunes 为以当前状态结束的全部关键词
 // rune 数，严格降序且无重复（自身 + 失败链继承；同节点多个折叠变体关键词
-// 只保留一条）。命中起点 = 从 pos 按 rune 数向前回退（轨道成员字节宽可不同，
+// 只保留一条）；outGroups 与 outRunes 平行的组号（折叠同形词组号恒等）。
+// 命中起点 = 从 pos 按 rune 数向前回退（轨道成员字节宽可不同，
 // 关键词字节长不可直接用作文本消耗，见 runeStartBack）。
 type foldNode struct {
-	base     int32   // 同 exactNode
-	count    int32   // 同 exactNode
-	fail     int32   // 同 exactNode
-	outRunes []int32 // 全部输出关键词 rune 数，严格降序无重复；nil 表示无
+	base      int32   // 同 exactNode
+	count     int32   // 同 exactNode
+	fail      int32   // 同 exactNode
+	outRunes  []int32 // 全部输出关键词 rune 数，严格降序无重复；nil 表示无
+	outGroups []int32 // 与 outRunes 平行的组号；同 rune 数的折叠变体组号恒等
 }
 
 func (n foldNode) seg() (base, count, fail int32) { return n.base, n.count, n.fail }
@@ -56,6 +64,7 @@ func (n foldNode) outs() int                      { return len(n.outRunes) }
 func (n foldNode) start(text string, pos, i int) int {
 	return runeStartBack(text, pos, int(n.outRunes[i]))
 }
+func (n foldNode) group(i int) int32 { return n.outGroups[i] }
 
 // machine 是两套自动机共用的泛型扫描引擎。转移表为全局 CSR 数组
 // （transKeys/transVals 按节点 base/count 区间分段），节点仅存自有 trie 边
@@ -69,6 +78,9 @@ type machine[N nodeAPI] struct {
 	transVals  []int32        // 全局转移表：与 transKeys 平行的转移目标（恒非 0）
 	rootNext   map[rune]int32 // root 的转移表 = 词库首字符表，兼任跳跃判断集（见 skipForward）
 	byteFilter [32]byte       // 词首 rune 的 UTF-8 首字节 256 位位图（见 skipForward）
+	groups     [][]string     // WithSynonyms 声明组成员表（nil = 未使用；WordGroup/WordGroups 前段）
+	singletons []int32        // 未声明分组的词库下标表：组号 = len(groups)+序号（WordGroup/WordGroups 后段）
+	words      []string       // 去重词库（折叠模式为归一形）；singletons 的下标依据，兼查原始词
 }
 
 // ---------------------------------------------------------------------------
@@ -168,9 +180,48 @@ func (m *machine[N]) skipForward(text string, pos int) int {
 	return n
 }
 
+// WordGroup 返回同义词组 g 的成员词：WithSynonyms 声明组（折叠模式为归一
+// 形）或未声明分组的单元素组（resolveSynonyms 编号规则：声明组在前，其后
+// 每个词库词一个组）。返回内部只读切片，调用方不得修改；越界组号返回 nil。
+func (m *machine[N]) WordGroup(g int) []string {
+	if g < 0 {
+		return nil
+	}
+	if g < len(m.groups) {
+		return m.groups[g]
+	}
+	if si := g - len(m.groups); si < len(m.singletons) {
+		i := m.singletons[si]
+		return m.words[i : i+1]
+	}
+	return nil
+}
+
+// WordGroups 返回全部同义词组，按组号升序（组号与 Match.Group / WordGroup
+// 同一编号空间）。外层切片为本次新建、可自由重排；元素为内部只读切片
+// （与 WordGroup 返回的相同，调用方不得修改元素内容）。折叠模式成员为
+// 归一形。
+func (m *machine[N]) WordGroups() [][]string {
+	if m.groups == nil {
+		// 未使用 WithSynonyms：每词一个单元素组，组号即去重词库序
+		out := make([][]string, len(m.words))
+		for i := range m.words {
+			out[i] = m.words[i : i+1]
+		}
+		return out
+	}
+	out := make([][]string, 0, len(m.groups)+len(m.singletons))
+	out = append(out, m.groups...)
+	for _, si := range m.singletons {
+		out = append(out, m.words[si:si+1])
+	}
+	return out
+}
+
 // pendHit 是待提交链上的一个已确定区间、尚未落袋的候选命中。
 type pendHit struct {
 	start, end int32
+	group      int32 // 命中词组号：随区间一并暂存，提交时落入 Match.Group
 }
 
 // scan 从 from 开始单遍扫描（自动机从 root 起步）；每确定一个最终命中调用 emit，
@@ -211,11 +262,11 @@ func (m *machine[N]) scan(text string, from int, emit func(Match) bool) {
 }
 
 // mergeCandidates 把以 pos 结束的全部关键词候选归并进待提交链，返回新链
-// （起点计算由节点类型决定，见 nodeAPI.start）。
+// （起点计算由节点类型决定，见 nodeAPI.start；组号经 outGroups 平行取出）。
 func (m *machine[N]) mergeCandidates(chain []pendHit, text string, s int32, pos int) []pendHit {
 	nd := m.nodes[s]
 	for i := range nd.outs() {
-		chain = mergeCandidate(chain, int32(nd.start(text, pos, i)), int32(pos))
+		chain = mergeCandidate(chain, int32(nd.start(text, pos, i)), int32(pos), nd.group(i))
 	}
 	return chain
 }
@@ -230,6 +281,7 @@ func (m *machine[N]) appendAll(out []Match, text string, s int32, pos int) []Mat
 			Start:   start,
 			End:     pos,
 			Keyword: text[start:pos],
+			Group:   int(nd.group(i)),
 		})
 	}
 	return out
@@ -308,6 +360,7 @@ func flushChain(chain []pendHit, text string, emit func(Match) bool) bool {
 			Start:   int(p.start),
 			End:     int(p.end),
 			Keyword: text[p.start:p.end],
+			Group:   int(p.group),
 		}) {
 			return false
 		}
@@ -315,9 +368,9 @@ func flushChain(chain []pendHit, text string, emit func(Match) bool) bool {
 	return true
 }
 
-// mergeCandidate 把候选 [cs,ce) 归并进待提交链，返回新链。候选按结束位置升序
-// 到达（同一结束位置按长度降序），链内起点升序、互不重叠。与链比较（k 为弹出
-// 后基准下标，chain[:k] 为保留前缀）：
+// mergeCandidate 把候选 [cs,ce)（组号 g）归并进待提交链，返回新链。候选按
+// 结束位置升序到达（同一结束位置按长度降序），链内起点升序、互不重叠。与链
+// 比较（k 为弹出后基准下标，chain[:k] 为保留前缀）：
 //   - cs < 链尾起点：候选更左，弹出链尾后继续向链左比较；链空则候选取代全部弹出者
 //   - cs == 基准起点：取更长（真包含关系一律输出最长），取代被弹出者
 //   - cs >= 基准结束（不重叠）：入链接续，取代被弹出者
@@ -325,21 +378,25 @@ func flushChain(chain []pendHit, text string, emit func(Match) bool) bool {
 //     被弹出者原样恢复。若允许其弹链，会出现「为必死候选让位而丢弃本可
 //     提交的命中」的空档（如 {0,000}+"000000000001" 在 [9,10) 的空档），
 //     破坏最左最长语义，且无状态 FindNext 永远无法复现该空档。
-func mergeCandidate(chain []pendHit, cs, ce int32) []pendHit {
+//
+// 组号随候选一并进出链：取代场景取候选的 g（同起点取更长时跨度对应更长
+// 关键词，组号随跨度身份转移）；链保留场景自动恢复被弹出者的组号。
+func mergeCandidate(chain []pendHit, cs, ce, g int32) []pendHit {
 	k := len(chain)
 	for k > 0 && cs < chain[k-1].start {
 		k-- // 候选更左：弹出链尾，继续向链左比较
 	}
 	if k == 0 {
-		return append(chain[:k], pendHit{cs, ce}) // 候选最左，取代全部弹出者
+		return append(chain[:k], pendHit{cs, ce, g}) // 候选最左，取代全部弹出者
 	}
 	t := &chain[k-1]
 	switch {
 	case cs >= t.end: // 不重叠：入链，取代被弹出者
-		return append(chain[:k], pendHit{cs, ce})
+		return append(chain[:k], pendHit{cs, ce, g})
 	case cs == t.start:
-		if ce > t.end { // 同起点取更长（真包含取最长）
+		if ce > t.end { // 同起点取更长（真包含取最长）：组号随更长关键词转移
 			t.end = ce
+			t.group = g
 		}
 		return chain[:k] // 取代被弹出者
 	default: // 与基准重叠且起点更晚：必死候选，链原样保留（弹出者恢复）
