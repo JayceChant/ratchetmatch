@@ -57,6 +57,7 @@ Notes: per-keyword baselines (BM / strings.Index) slow down linearly with dictio
 - **BM bad-character skip**: while the automaton is at the root state, a "dictionary first-character set + 256-bit byte filter" batch-skips text segments where no match can start, ~1.4x speedup on mixed Chinese/English text (the starting rune of any match must be a keyword's first character, so the skip criterion is provably safe — no missed hits).
 - **Byte-based positions**: `Match.Start/End` are byte offsets, so `text[Start:End]` slices out the keyword directly. No rune-index API — `[]rune` pre-conversion would instantly add +300% memory for ASCII text and defeat the skip and first-hit optimizations.
 - **Non-overlapping leftmost-longest semantics**: the smallest start wins; at the same start, the longest keyword occurring in full wins (proper containment always yields the longest match); results are deterministic regardless of how they are found.
+- **Synonym grouping as output metadata**: group members each enter the trie as their own keyword (word-level equivalence cannot merge paths the way case folding does with per-rune orbits); group IDs live in a parallel node array and travel with each hit — grouping never participates in the leftmost-longest decision, and the query hot path gains zero extra branches.
 - **Lock-free concurrency**: `Matcher` is read-only after construction, laid out as compact contiguous arrays (nearly pointer-free); queries are allocation-free, keeping Go GC marking cost near-constant — suitable for services that keep a dictionary resident in memory for months.
 - **Robustness**: invalid UTF-8 text never panics and never skips subsequent content.
 
@@ -84,11 +85,13 @@ For a complete runnable example (with output) see `example_test.go`; full copy-a
 
 | Identifier | Description |
 |---|---|
-| `New(keywords []string) (*Matcher, error)` | Builds an immutable `Matcher`. Returns distinguishable errors for an empty dictionary, empty strings, invalid UTF-8, or U+FFFD bytes in keywords; duplicate keywords are deduplicated |
+| `New(keywords []string, opts ...Option) (*Matcher, error)` | Builds an immutable `Matcher`. Returns distinguishable errors when the dictionary (keywords merged with `WithSynonyms` members) is empty, contains empty strings, invalid UTF-8, or U+FFFD bytes; duplicate keywords are deduplicated; a word declared in two synonym groups is rejected |
 | `(*Matcher) FindAll(text string) []Match` | All hits, ascending by `Start`; returns `nil` when nothing matches |
 | `(*Matcher) FindAllOverlapping(text string) []Match` | All occurrences (including mutually overlapping ones), ascending by `End`, longest first at equal `End`; suitable for term-frequency counting and index building, output-sensitive O(n+K) cost |
 | `(*Matcher) FindNext(text string, offset int) (Match, bool)` | Returns the first hit from `offset`, stopping as soon as one is found. `offset<0` is treated as 0; `>=len(text)` or no hit returns `(Match{}, false)`; an offset landing inside a multi-byte character is aligned forward to a rune boundary |
-| `Match{Start, End int; Keyword string}` | One hit; `text[Start:End] == Keyword` always holds |
+| `(*Matcher) CaseFold() bool` | Reports whether this is a case-folding matcher (built with `WithCaseFold`) |
+| `(*Matcher) GroupWords(g int) []string` | Returns the member words of synonym group g (canonical forms under case folding); the returned slice is internal and read-only; an out-of-range group returns `nil` |
+| `Match{Start, End int; Keyword string; Group int}` | One hit; `text[Start:End] == Keyword` always holds. `Group` is the hit's synonym group ID, always valid (undeclared words form single-member groups) |
 
 ## Matching Semantics (Non-Overlapping Leftmost-Longest)
 
@@ -123,6 +126,27 @@ Case variants in the dictionary are merged, so nothing is missed; `Match.Keyword
 - **Semantics bonus**: on case-mixed text, fold finds all case variants that exact mode misses — in the ASCII benchmark fold reports ~1000 extra hits (uppercased keywords) at no measurable scan-time cost.
 
 Rule of thumb: enable `WithCaseFold()` whenever case-insensitivity is desired — the query-side cost is negligible; only builds of very large dictionaries (>10k keywords) may notice the construction overhead.
+
+### Synonym Groups
+
+To have synonyms natively grouped in the results (a semantic "fold"), you don't need to maintain a word-to-group map and merge hits afterwards: `WithSynonyms` declares synonym groups, members are enrolled into the dictionary automatically, and each hit's `Match.Group` carries the group ID:
+
+```go
+m, _ := ratchetmatch.New([]string{"server"},
+    ratchetmatch.WithSynonyms([][]string{
+        {"computer", "PC"}, // group 0: members are enrolled automatically
+    }))
+m.FindAll("computer and server")
+// computer(0,8, Group=0), server(13,19, Group=1) — undeclared words form single-member groups
+m.GroupWords(0) // [computer PC]
+```
+
+Key points:
+
+- **Grouping never changes matching semantics**: non-overlapping leftmost-longest still decides (if the dictionary contains both `computer` and `computer vision`, the text `computer vision` matches the latter, carrying its own group). Hit intervals are identical with or without grouping, so aggregation is just `count[m.Group]++`.
+- **Partition numbering, always valid**: declared groups are numbered 0..k-1 in declaration order; undeclared words get single-member groups following the deduplicated dictionary order. Any `Match.Group` can be passed to `GroupWords` directly.
+- **Orthogonal to `WithCaseFold`**: when combined, word identity is decided on canonical folded forms — `"PC"` and `"pc"` fold to the same form, merging naturally in one group and rejected across two; `Group` also serves as the canonical keyword identity for fold hits (`Keyword` is the case-variant text slice, so counting by word needs no extra normalization).
+- **Validation**: empty groups, members that are empty/invalid UTF-8/contain U+FFFD, and words declared in two groups all return errors (messages include group and member indices for distinguishability); duplicate members within a group are deduplicated. The dictionary may consist of groups only (`New(nil, WithSynonyms(...))`).
 
 For the authoritative description of algorithm principles, API contracts, and acceptance scenarios, see `spec/spec.md`.
 
