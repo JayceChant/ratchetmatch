@@ -26,7 +26,8 @@ func WithCaseFold() Option {
 
 // WithSynonyms 声明同义词组：groups 每个内层切片为一组同义词，组员自动
 // 并入词库（与显式关键词合并去重、同套合法性校验），命中的 Match.Group
-// 携带命中词组号，GroupWords(g) 返回组内成员词。分组是纯输出元数据，
+// 携带命中词组号，WordGroup(g) 返回组内成员词、WordGroups() 返回全部组。
+// 分组是纯输出元数据，
 // 不改变任何匹配语义——非重叠最左最长、重叠全量、首停照旧裁决，胜者的
 // 组随 Match 带出（如词库含 "电脑城" 时，文本 "电脑城" 命中的是
 // "电脑城" 的组，而非 "电脑" 的组）。
@@ -35,7 +36,8 @@ func WithCaseFold() Option {
 // 0..k-1；未声明分组的词获得单元素组（去重词库序：显式关键词在前、组员
 // 按组序在后）。同一词出现在两个声明组报错；空组、空串或非法词报错。
 // 与 WithCaseFold 组合时，词身份按折叠归一形判定（"PC" 与 "pc" 归一形
-// 相同，分属两组即冲突，同组则合一），GroupWords 返回归一形成员词。
+// 相同，分属两组即冲突，同组则合一），WordGroup / WordGroups 返回归一形
+// 成员词。
 func WithSynonyms(groups [][]string) Option {
 	return func(o *queryOpts) { o.synGroups = groups }
 }

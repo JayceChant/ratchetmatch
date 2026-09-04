@@ -1,5 +1,5 @@
 // 本文件为同义词分组（WithSynonyms）的专项测试（package ratchetmatch）：
-//   - 分区语义：恒填充、单元素组、声明组编号与 GroupWords 往返；
+//   - 分区语义：恒填充、单元素组、声明组编号与 WordGroup / WordGroups 往返；
 //   - 语义正交：有/无分组构建的 FindAll / FindAllOverlapping / FindNext
 //     区间裁决逐条一致（组号除外），含「同起点取更长时组号随更长关键词
 //     转移」「必死候选不改变链」等链规则边角；
@@ -27,7 +27,7 @@ func mustNewSyn(t *testing.T, keywords []string, groups [][]string) Matcher {
 	return m
 }
 
-// TestSynonymsPartition 分区语义：恒填充、组号规则与 GroupWords 往返。
+// TestSynonymsPartition 分区语义：恒填充、组号规则与 WordGroup 往返。
 func TestSynonymsPartition(t *testing.T) {
 	m := mustNewSyn(t, []string{"服务器"}, [][]string{{"电脑", "计算机", "PC"}})
 	// 组员自动入库可命中；组号：声明组 {电脑,计算机,PC}=0，服务器自成组 1
@@ -38,17 +38,32 @@ func TestSynonymsPartition(t *testing.T) {
 	}
 	assertMatches(t, text, "同义词分组", m.FindAll(text), want)
 
-	// GroupWords 往返：声明组返回去重成员（词库序），单元素组返回词本身
-	if got := m.GroupWords(0); !slices.Equal(got, []string{"电脑", "计算机", "PC"}) {
-		t.Errorf("GroupWords(0) = %q, 期望 [电脑 计算机 PC]", got)
+	// WordGroup 往返：声明组返回去重成员（词库序），单元素组返回词本身
+	if got := m.WordGroup(0); !slices.Equal(got, []string{"电脑", "计算机", "PC"}) {
+		t.Errorf("WordGroup(0) = %q, 期望 [电脑 计算机 PC]", got)
 	}
-	if got := m.GroupWords(1); !slices.Equal(got, []string{"服务器"}) {
-		t.Errorf("GroupWords(1) = %q, 期望 [服务器]", got)
+	if got := m.WordGroup(1); !slices.Equal(got, []string{"服务器"}) {
+		t.Errorf("WordGroup(1) = %q, 期望 [服务器]", got)
 	}
 	for _, g := range []int{-1, 2, 100} {
-		if got := m.GroupWords(g); got != nil {
-			t.Errorf("GroupWords(%d) = %q, 期望 nil", g, got)
+		if got := m.WordGroup(g); got != nil {
+			t.Errorf("WordGroup(%d) = %q, 期望 nil", g, got)
 		}
+	}
+	// WordGroups：一次取全部组，下标即组号，与 WordGroup 逐组一致
+	all := m.WordGroups()
+	if len(all) != 2 {
+		t.Fatalf("WordGroups() = %d 组, 期望 2 组", len(all))
+	}
+	for g := range all {
+		if !slices.Equal(all[g], m.WordGroup(g)) {
+			t.Errorf("WordGroups()[%d] = %q 与 WordGroup(%d) 不一致", g, all[g], g)
+		}
+	}
+	// 外层切片可重排、元素为内部只读切片
+	all[0], all[1] = all[1], all[0]
+	if !slices.Equal(m.WordGroup(0), []string{"电脑", "计算机", "PC"}) {
+		t.Error("重排 WordGroups 外层不得影响内部状态")
 	}
 
 	// 未声明分组的词自成单元素组：词库序为显式关键词在前、组员按组序在后。
@@ -59,14 +74,14 @@ func TestSynonymsPartition(t *testing.T) {
 		if len(hits) != 1 || hits[0].Group != g {
 			t.Errorf("词 %q 命中 = %v, 期望组号 %d", kw, hits, g)
 		}
-		if got := m2.GroupWords(hits[0].Group); g != 0 && !slices.Equal(got, []string{kw}) {
-			t.Errorf("GroupWords(%d) 与词 %q 不对应: %q", g, kw, got)
+		if got := m2.WordGroup(hits[0].Group); g != 0 && !slices.Equal(got, []string{kw}) {
+			t.Errorf("WordGroup(%d) 与词 %q 不对应: %q", g, kw, got)
 		}
 	}
 
 	// 组内重复成员自动去重；同一词在显式关键词与组员中重复只入一次词库
 	m3 := mustNewSyn(t, []string{"A", "A"}, [][]string{{"B", "B", "C"}})
-	if got := m3.GroupWords(0); !slices.Equal(got, []string{"B", "C"}) {
+	if got := m3.WordGroup(0); !slices.Equal(got, []string{"B", "C"}) {
 		t.Errorf("组内去重失败: %q", got)
 	}
 	for _, kw := range []string{"A", "B", "C"} {
@@ -83,8 +98,14 @@ func TestSynonymsPartition(t *testing.T) {
 	if got := m4.FindAll("px 与像素"); len(got) != 2 || got[0].Group != 0 || got[1].Group != 0 {
 		t.Errorf("纯组词库命中不符: %v", got)
 	}
-	if len(m4.GroupWords(0)) != 2 {
-		t.Errorf("纯组词库 GroupWords(0) = %q", m4.GroupWords(0))
+	if len(m4.WordGroup(0)) != 2 {
+		t.Errorf("纯组词库 WordGroup(0) = %q", m4.WordGroup(0))
+	}
+	// 无 WithSynonyms 构建：WordGroups 亦可用——每词一个单元素组（词库序）
+	m5 := mustNew(t, []string{"x", "y"})
+	all5 := m5.WordGroups()
+	if len(all5) != 2 || !slices.Equal(all5[0], []string{"x"}) || !slices.Equal(all5[1], []string{"y"}) {
+		t.Errorf("无分组 WordGroups() = %q, 期望 [[x] [y]]", all5)
 	}
 }
 
@@ -205,11 +226,14 @@ func TestSynonymsWithCaseFold(t *testing.T) {
 	if hits[0].Keyword != "pc" || hits[2].Keyword != "PC" {
 		t.Errorf("Keyword 应为文本原样切片: %q %q", hits[0].Keyword, hits[2].Keyword)
 	}
-	// GroupWords 返回归一形成员（foldKey 取轨道最小 rune，ASCII 大写字母
-	// 为代表：PC/pc 归一同形去重为 2 项）
-	got := m.GroupWords(0)
+	// WordGroup 返回归一形成员（foldKey 取轨道最小 rune，ASCII 大写字母
+	// 为代表：PC/pc 归一同形去重为 2 项）；WordGroups 全量返回单组
+	got := m.WordGroup(0)
 	if !slices.Equal(got, []string{"个人电脑", "PC"}) {
-		t.Errorf("GroupWords(0) = %q, 期望 [个人电脑 PC]（归一形）", got)
+		t.Errorf("WordGroup(0) = %q, 期望 [个人电脑 PC]（归一形）", got)
+	}
+	if all := m.WordGroups(); len(all) != 1 || !slices.Equal(all[0], got) {
+		t.Errorf("WordGroups() = %q, 期望 [[个人电脑 PC]]", all)
 	}
 	// 大小写变体词库在 fold 模式下归一同形：词库变体自动同组
 	m2, err := New([]string{"Stop", "stop"}, WithCaseFold(), WithSynonyms([][]string{{"stop", "halt"}}))
@@ -225,8 +249,8 @@ func TestSynonymsWithCaseFold(t *testing.T) {
 			}
 		}
 	}
-	if got := m2.GroupWords(0); !slices.Equal(got, []string{"STOP", "HALT"}) {
-		t.Errorf("GroupWords(0) = %q, 期望 [STOP HALT]（归一形）", got)
+	if got := m2.WordGroup(0); !slices.Equal(got, []string{"STOP", "HALT"}) {
+		t.Errorf("WordGroup(0) = %q, 期望 [STOP HALT]（归一形）", got)
 	}
 	// 分组在 fold 模式下不改变语义：与「含全部组员的无分组 fold 构建」对照
 	m3, _ := New([]string{"Go", "中文", "Golang"}, WithCaseFold())

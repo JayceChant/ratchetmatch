@@ -37,18 +37,18 @@
 
 ### Requirement: 同义词分组（WithSynonyms 构建选项）
 
-`New` 接受 `WithSynonyms(groups [][]string) Option`：每个内层切片为一组同义词，组员**自动并入词库**（与显式关键词合并去重、同套合法性校验）；`Match` 增加 `Group int` 字段携带命中词组号，`Matcher.GroupWords(g int) []string` 返回组内全部成员词。**分组是纯输出元数据，绝不改变匹配语义**——非重叠最左最长、重叠全量、首停语义与分组完全正交：命中区间的裁决与无分组构建逐字节一致，胜者的组随 Match 带出（2026-09-04 定型，用户决策：恒填充分区语义 + 提供组访问器 + 组员自动入库）：
+`New` 接受 `WithSynonyms(groups [][]string) Option`：每个内层切片为一组同义词，组员**自动并入词库**（与显式关键词合并去重、同套合法性校验）；`Match` 增加 `Group int` 字段携带命中词组号，`Matcher.WordGroup(g int) []string` 返回组内全部成员词，`Matcher.WordGroups() [][]string` 按组号升序一次返回全部组（下标即 `Match.Group` 组号；2026-09-04 更名 GroupWords → WordGroup 并增补 WordGroups）。**分组是纯输出元数据，绝不改变匹配语义**——非重叠最左最长、重叠全量、首停语义与分组完全正交：命中区间的裁决与无分组构建逐字节一致，胜者的组随 Match 带出（2026-09-04 定型，用户决策：恒填充分区语义 + 提供组访问器 + 组员自动入库）：
 
 - **分区语义（恒填充）**：词库词与组号是全函数——每个词库词恰属一组。声明组按声明顺序编号 0..k-1；未声明分组的词按去重后词库顺序（显式关键词在前、组员按组序在后）依次获得单元素组。`Match.Group` 恒有效，调用方按组聚合（如 `count[m.Group]++`）无需判别有效性
-- **与 WithCaseFold 正交组合**：fold 模式下词身份按折叠归一形（逐 rune foldKey，与折叠 trie 边键同源）判定——归一形相同的词（"Stop"/"stop"）必然同组；`GroupWords` 返回归一形成员词。`Group` 兼作折叠命中的规范词身份：Keyword 是大小写不定的文本切片，Group 才跨大小写形态稳定，按词计数无需再归一
+- **与 WithCaseFold 正交组合**：fold 模式下词身份按折叠归一形（逐 rune foldKey，与折叠 trie 边键同源）判定——归一形相同的词（"Stop"/"stop"）必然同组；`WordGroup` / `WordGroups` 返回归一形成员词。`Group` 兼作折叠命中的规范词身份：Keyword 是大小写不定的文本切片，Group 才跨大小写形态稳定，按词计数无需再归一
 - **校验**（错误信息可区分原因）：空组报错；组员为空串/非法 UTF-8/含 U+FFFD 报错（含组与成员下标）；同一词出现在两个声明组报错（含词与两组号）——组内重复成员自动去重。fold 模式冲突判定同样按归一形（`{"PC",…}` 与 `{"pc",…}` 两组冲突）
 - **词库可仅由组构成**：`New(nil, WithSynonyms(groups))` 以组员为词库正常构建；keywords 与 groups 皆空才报「keyword list is empty」
 - **实现形态（同义词是整词级等价，路径不可能像 fold 一样合并）**：全部组员各自成词入 trie，组号下沉为节点平行数组 outGroups（与 outLens/outRunes 同构、沿 fail 链共享切片，每输出条目 +4B）；命中时随区间拷入待提交链、提交时落入 Match——查询热路径零新增分支，扫描/跳跃/CSR 不变。待提交链「同起点取更长」分支替换候选时组号随跨度身份一并转移（跨度对应更长关键词）
-- `GroupWords` 返回内部只读切片（调用方不得修改），越界组号返回 nil
+- `WordGroup` 返回内部只读切片（调用方不得修改），越界组号返回 nil；`WordGroups` 外层切片为新建（可自由重排），元素同为内部只读切片
 
 #### Scenario: 同义词分组
 - **WHEN** `New([]string{"服务器"}, WithSynonyms([][]string{{"电脑","计算机","PC"}}))`，文本 `"电脑和服务器"` **THEN** 命中 电脑(0,6,Group=0)、服务器(9,18,Group=1)——PC 自动入库可命中；服务器未声明自成单元素组（组号 1，词库序：显式关键词在前）
-- **WHEN** 同上 Matcher `GroupWords(0)` **THEN** 返回 `["电脑","计算机","PC"]`；`GroupWords(2)`（越界）返回 nil
+- **WHEN** 同上 Matcher `WordGroup(0)` **THEN** 返回 `["电脑","计算机","PC"]`；`WordGroup(2)`（越界）返回 nil；`WordGroups()` 返回 `[["电脑","计算机","PC"],["服务器"]]`（下标即组号）
 - **WHEN** 词库 {"a","ab"}（ab 未声明分组）文本 "ab"，**THEN** 命中 ab(0,2) 且 Group 为 ab 的单元素组——同起点真包含取最长时组号随更长关键词转移
 - **WHEN** `New(nil, WithCaseFold(), WithSynonyms([][]string{{"个人电脑","PC","pc"}}))`，文本 `"pc 个人电脑"` **THEN** 两处命中 Group 相同（归一形 "pc" 即 "PC"），Keyword 分别为文本原样切片
 - **WHEN** 同一词出现在两个声明组（如 `{{"A","B"},{"B","C"}}`；fold 模式 `{{"PC"},{"pc"}}` 同样冲突）**THEN** `New` 报错且信息含词与两组号

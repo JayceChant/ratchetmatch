@@ -90,7 +90,8 @@ For a complete runnable example (with output) see `example_test.go`; full copy-a
 | `(*Matcher) FindAllOverlapping(text string) []Match` | All occurrences (including mutually overlapping ones), ascending by `End`, longest first at equal `End`; suitable for term-frequency counting and index building, output-sensitive O(n+K) cost |
 | `(*Matcher) FindNext(text string, offset int) (Match, bool)` | Returns the first hit from `offset`, stopping as soon as one is found. `offset<0` is treated as 0; `>=len(text)` or no hit returns `(Match{}, false)`; an offset landing inside a multi-byte character is aligned forward to a rune boundary |
 | `(*Matcher) CaseFold() bool` | Reports whether this is a case-folding matcher (built with `WithCaseFold`) |
-| `(*Matcher) GroupWords(g int) []string` | Returns the member words of synonym group g (canonical forms under case folding); the returned slice is internal and read-only; an out-of-range group returns `nil` |
+| `(*Matcher) WordGroup(g int) []string` | Returns the member words of synonym group g (canonical forms under case folding); the returned slice is internal and read-only; an out-of-range group returns `nil` |
+| `(*Matcher) WordGroups() [][]string` | Returns all synonym groups, ascending by group ID (indices are `Match.Group` values); the outer slice is freshly built and free to reorder, elements are internal read-only slices |
 | `Match{Start, End int; Keyword string; Group int}` | One hit; `text[Start:End] == Keyword` always holds. `Group` is the hit's synonym group ID, always valid (undeclared words form single-member groups) |
 
 ## Matching Semantics (Non-Overlapping Leftmost-Longest)
@@ -138,13 +139,14 @@ m, _ := ratchetmatch.New([]string{"server"},
     }))
 m.FindAll("computer and server")
 // computer(0,8, Group=0), server(13,19, Group=1) — undeclared words form single-member groups
-m.GroupWords(0) // [computer PC]
+m.WordGroup(0) // [computer PC]
+m.WordGroups() // [[computer PC] [server]] — indices are group IDs
 ```
 
 Key points:
 
 - **Grouping never changes matching semantics**: non-overlapping leftmost-longest still decides (if the dictionary contains both `computer` and `computer vision`, the text `computer vision` matches the latter, carrying its own group). Hit intervals are identical with or without grouping, so aggregation is just `count[m.Group]++`.
-- **Partition numbering, always valid**: declared groups are numbered 0..k-1 in declaration order; undeclared words get single-member groups following the deduplicated dictionary order. Any `Match.Group` can be passed to `GroupWords` directly.
+- **Partition numbering, always valid**: declared groups are numbered 0..k-1 in declaration order; undeclared words get single-member groups following the deduplicated dictionary order. Any `Match.Group` can be passed to `WordGroup` directly; `WordGroups()` returns all groups at once.
 - **Orthogonal to `WithCaseFold`**: when combined, word identity is decided on canonical folded forms — `"PC"` and `"pc"` fold to the same form, merging naturally in one group and rejected across two; `Group` also serves as the canonical keyword identity for fold hits (`Keyword` is the case-variant text slice, so counting by word needs no extra normalization).
 - **Validation**: empty groups, members that are empty/invalid UTF-8/contain U+FFFD, and words declared in two groups all return errors (messages include group and member indices for distinguishability); duplicate members within a group are deduplicated. The dictionary may consist of groups only (`New(nil, WithSynonyms(...))`).
 

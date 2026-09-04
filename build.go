@@ -258,8 +258,8 @@ func setFilterBit(bf *[32]byte, r rune) {
 }
 
 // buildExact 从去重后的关键词列表构建精确自动机（New 默认模式的实现体，
-// 见 matcher.go）：part 携带同义词分组解析结果（词→组号表与 GroupWords
-// 成员表；无 WithSynonyms 时为每词单元素组，见 synonymPart）。
+// 见 matcher.go）：part 携带同义词分组解析结果（词→组号表与 WordGroup /
+// WordGroups 成员表；无 WithSynonyms 时为每词单元素组，见 synonymPart）。
 func buildExact(keywords []string, part *synonymPart) *exactMatcher {
 	b := newExactBuilder(len(keywords))
 	em := &exactMatcher{}

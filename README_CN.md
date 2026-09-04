@@ -90,7 +90,8 @@ for _, m := range matcher.FindAll(text) {
 | `(*Matcher) FindAllOverlapping(text string) []Match` | 全部出现（含互相重叠者），按 `End` 升序、同 `End` 长度降序；适合词频统计、索引构建，开销输出敏感 O(n+K) |
 | `(*Matcher) FindNext(text string, offset int) (Match, bool)` | 从 `offset` 返回首个命中，找到即停。`offset<0` 按 0；`>=len(text)` 或无命中返回 `(Match{}, false)`；落在多字节字符中间时向后对齐 rune 边界 |
 | `(*Matcher) CaseFold() bool` | 报告是否为大小写折叠模式（`WithCaseFold` 构建） |
-| `(*Matcher) GroupWords(g int) []string` | 返回同义词组 g 的成员词（折叠模式为归一形）；返回内部只读切片，越界组号返回 `nil` |
+| `(*Matcher) WordGroup(g int) []string` | 返回同义词组 g 的成员词（折叠模式为归一形）；返回内部只读切片，越界组号返回 `nil` |
+| `(*Matcher) WordGroups() [][]string` | 返回全部同义词组，按组号升序（下标即 `Match.Group`）；外层切片可自由重排，元素为内部只读切片 |
 | `Match{Start, End int; Keyword string; Group int}` | 一次命中；`text[Start:End] == Keyword` 恒成立。`Group` 为命中词的同义词组号，恒有效（未声明的词自成单元素组） |
 
 ## 匹配语义（非重叠最左最长）
@@ -138,13 +139,14 @@ m, _ := ratchetmatch.New([]string{"服务器"},
     }))
 m.FindAll("电脑和服务器")
 // 电脑(0,6, Group=0)、服务器(9,18, Group=1)——未声明的词自成单元素组
-m.GroupWords(0) // [电脑 计算机 PC]
+m.WordGroup(0) // [电脑 计算机 PC]
+m.WordGroups() // [[电脑 计算机 PC] [服务器]]——下标即组号
 ```
 
 要点：
 
 - **分组不改变匹配语义**：非重叠最左最长照旧裁决（词库同时含「电脑」与「电脑城」时，文本「电脑城」命中的是「电脑城」，带着它自己的组）。有/无分组构建的命中区间逐条一致，可直接按 `count[m.Group]++` 聚合。
-- **分区编号、恒有效**：声明组按声明顺序编号 0..k-1；未声明分组的词按去重词库序获得单元素组。任何 `Match.Group` 都可直接传给 `GroupWords`。
+- **分区编号、恒有效**：声明组按声明顺序编号 0..k-1；未声明分组的词按去重词库序获得单元素组。任何 `Match.Group` 都可直接传给 `WordGroup`；`WordGroups()` 一次返回全部组。
 - **与 `WithCaseFold` 正交**：组合使用时词身份按折叠归一形判定——`"PC"` 与 `"pc"` 归一同形，同组自然合一、分属两组则报错；`Group` 兼作折叠命中的规范词身份（`Keyword` 是大小写不定的文本切片，按词计数无需再归一）。
 - **校验**：空组、组员空串/非法 UTF-8/含 U+FFFD、同一词出现在两个声明组均报错（错误信息含组号与成员下标，可区分原因）；组内重复成员自动去重。词库可仅由组构成（`New(nil, WithSynonyms(...))`）。
 

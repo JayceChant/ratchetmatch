@@ -34,7 +34,7 @@ import (
 // 声明顺序编号，未声明的词各自成单元素组（去重词库序）。分组不改变匹配
 // 语义，调用方可直接按组聚合。折叠模式下 Group 亦是命中词的规范词身份
 // （Keyword 随文本大小写形态变化，Group 跨形态稳定），组员经
-// Matcher.GroupWords 查询。
+// Matcher.WordGroup / WordGroups 查询。
 type Match struct {
 	Start   int
 	End     int
@@ -71,11 +71,15 @@ type Matcher interface {
 	// CaseFold 报告该 Matcher 是否为大小写折叠模式（即 New 时是否传入了
 	// WithCaseFold）。
 	CaseFold() bool
-	// GroupWords 返回同义词组 g 的全部成员词（去重后的词库序）：WithSynonyms
+	// WordGroup 返回同义词组 g 的全部成员词（去重后的词库序）：WithSynonyms
 	// 声明组返回声明成员（折叠模式为折叠归一形），未声明分组的词自成单元素
 	// 组。返回内部只读切片，调用方不得修改；越界组号返回 nil。组号恒有效：
 	// 任何命中的 Match.Group 均可直接传入。
-	GroupWords(g int) []string
+	WordGroup(g int) []string
+	// WordGroups 返回全部同义词组，按组号升序（下标即 Match.Group 组号）。
+	// 外层切片为新建、可自由重排；元素与 WordGroup 返回的内部只读切片相同，
+	// 不得修改元素内容。
+	WordGroups() [][]string
 
 	// isInternal 密封接口：包外类型无法实现 Matcher，新增方法不构成破坏性
 	// 变更。

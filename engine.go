@@ -78,8 +78,8 @@ type machine[N nodeAPI] struct {
 	transVals  []int32        // 全局转移表：与 transKeys 平行的转移目标（恒非 0）
 	rootNext   map[rune]int32 // root 的转移表 = 词库首字符表，兼任跳跃判断集（见 skipForward）
 	byteFilter [32]byte       // 词首 rune 的 UTF-8 首字节 256 位位图（见 skipForward）
-	groups     [][]string     // WithSynonyms 声明组成员表（nil = 未使用；GroupWords 前段）
-	singletons []int32        // 未声明分组的词库下标表：组号 = len(groups)+序号（GroupWords 后段）
+	groups     [][]string     // WithSynonyms 声明组成员表（nil = 未使用；WordGroup/WordGroups 前段）
+	singletons []int32        // 未声明分组的词库下标表：组号 = len(groups)+序号（WordGroup/WordGroups 后段）
 	words      []string       // 去重词库（折叠模式为归一形）；singletons 的下标依据，兼查原始词
 }
 
@@ -180,10 +180,10 @@ func (m *machine[N]) skipForward(text string, pos int) int {
 	return n
 }
 
-// GroupWords 返回同义词组 g 的成员词：WithSynonyms 声明组（折叠模式为归一
+// WordGroup 返回同义词组 g 的成员词：WithSynonyms 声明组（折叠模式为归一
 // 形）或未声明分组的单元素组（resolveSynonyms 编号规则：声明组在前，其后
 // 每个词库词一个组）。返回内部只读切片，调用方不得修改；越界组号返回 nil。
-func (m *machine[N]) GroupWords(g int) []string {
+func (m *machine[N]) WordGroup(g int) []string {
 	if g < 0 {
 		return nil
 	}
@@ -195,6 +195,27 @@ func (m *machine[N]) GroupWords(g int) []string {
 		return m.words[i : i+1]
 	}
 	return nil
+}
+
+// WordGroups 返回全部同义词组，按组号升序（组号与 Match.Group / WordGroup
+// 同一编号空间）。外层切片为本次新建、可自由重排；元素为内部只读切片
+// （与 WordGroup 返回的相同，调用方不得修改元素内容）。折叠模式成员为
+// 归一形。
+func (m *machine[N]) WordGroups() [][]string {
+	if m.groups == nil {
+		// 未使用 WithSynonyms：每词一个单元素组，组号即去重词库序
+		out := make([][]string, len(m.words))
+		for i := range m.words {
+			out[i] = m.words[i : i+1]
+		}
+		return out
+	}
+	out := make([][]string, 0, len(m.groups)+len(m.singletons))
+	out = append(out, m.groups...)
+	for _, si := range m.singletons {
+		out = append(out, m.words[si:si+1])
+	}
+	return out
 }
 
 // pendHit 是待提交链上的一个已确定区间、尚未落袋的候选命中。
