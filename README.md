@@ -13,6 +13,11 @@
 
 An ACBM (Aho-Corasick + Boyer-Moore) multi-pattern matching library optimized for Chinese text: build the keyword automaton once, scan each long text in a single pass, and get every keyword hit. Zero third-party dependencies, Go standard library only.
 
+- **Synonym groups**: declare groups with `WithSynonyms` and every hit carries its group ID (`Match.Group`) — synonymous concepts are natively merged, no post-hoc word-to-group lookup; grouping never changes matching semantics and composes with case folding.
+- **Case folding**: `WithCaseFold` gives `strings.EqualFold` semantics (per-rune SimpleFold orbits); case variants merge so nothing is missed, at negligible query cost.
+- **Three query forms**: `FindAll` non-overlapping leftmost-longest (highlighting/filtering), `FindAllOverlapping` all occurrences (term frequency/indexing), `FindNext` first-hit-stop (on-demand iteration over very long texts, ~10x).
+- **Built for scanning**: sparse transition table with amortized-O(1) fail-pointer fallback, root-state bad-character skipping (~1.4x on mixed text); read-only after construction, allocation-free queries, lock-free concurrency for months-long residency.
+
 ## When to Use
 
 **Suitable**: fixed keyword dictionary, varying target texts — build once with `New`, then query many long texts repeatedly (content filtering, auditing, risk control, and other streaming scan scenarios).
