@@ -2,6 +2,7 @@
 
 ## [0.2.0](https://github.com/JayceChant/ratchetmatch/compare/v0.1.0...v0.2.0) (2026-09-08)
 
+新增大小写折叠（WithCaseFold）与同义词分组（WithSynonyms）两个构建期选项；匹配语义与既有 API 不变。
 
 ### Features
 
