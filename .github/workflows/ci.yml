@@ -21,8 +21,9 @@ jobs:
         # 当前 stable 即 1.27.x，待 1.28 发布后 stable 自动指向新版本）
         go-version: ["1.27.x", "stable"]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      # action 引用统一锚定 tag 对应的 commit hash（防 tag 被移动导致行为漂移），升级须手动
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ matrix.go-version }}
       - name: 构建
@@ -38,7 +39,7 @@ jobs:
         run: go test -race ./... -count=1
       - name: 上传覆盖率到 Codecov
         if: matrix.go-version == 'stable'
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.txt
@@ -48,11 +49,11 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: stable
       - name: golangci-lint（配置见 .golangci.yml，要求 0 issues）
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: v2.13

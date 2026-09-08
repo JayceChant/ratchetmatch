@@ -16,8 +16,9 @@ jobs:
     name: Vulnerability Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      # action 引用统一锚定 tag 对应的 commit hash（防 tag 被移动导致行为漂移），升级须手动
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: stable
       - name: govulncheck（官方漏洞数据库扫描）
