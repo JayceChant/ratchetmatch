@@ -1,0 +1,35 @@
+# release-please 自动版本发布（Conventional Commits → Release PR → tag/GitHub Release）
+# 工作方式：master 有新提交时，若无待发版内容则静默；否则自动维护一个 Release PR
+# （标题形如 chore(master): release X.Y.Z），内含版本号变更与 CHANGELOG.md 增量。
+# 合并该 PR 即打 tag vX.Y.Z 并创建 GitHub Release。版本由 commit 前缀决定：
+#   feat: → 次版本 +1；fix: → 修订号 +1；feat!/fix!/BREAKING CHANGE: → 主版本 +1。
+# 使用 GITHUB_TOKEN 时其他工作流不会因本次推送触发（GitHub 官方限制，防递归）。
+# 首次运行前需要仓库已有 tag（本仓库 v0.1.0）作为起点。
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # 创建 Release PR 提交与 tag、GitHub Release
+      pull-requests: write  # 创建与更新 Release PR
+    steps:
+      # 第三方 action 锚定到版本对应的完整 commit hash，杜绝 tag 被移动导致行为漂移；
+      # 升级时手动改 hash（# 后注释仅作版本标注）。发布 tag 见
+      # https://github.com/googleapis/release-please-action/releases
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # 单 module Go 库：仓库根即包根，用简单配置而非 manifest 模式
+          release-type: go
+          target-branch: master
+          # 起点自动取仓库已有最高 tag（当前 v0.1.0）：从该 tag 向 HEAD 收集
+          # feat/fix 生成下个版本与 CHANGELOG.md（v0.1.0 当时不带 changelog，
+          # 首个 Release PR 会补建 CHANGELOG.md 并汇总期间全部变更）
